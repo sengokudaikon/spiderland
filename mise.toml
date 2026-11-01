@@ -1,0 +1,22 @@
+# Project tasks: `mise tasks` lists them, `mise run <task>` runs one.
+# Rust nightly is selected by rust-toolchain.toml.
+
+[tasks.lint]
+description = "Clippy over every target, warnings as errors"
+run = "cargo clippy --workspace --all-targets --offline -- -D warnings"
+
+[tasks.fmt]
+description = "Format the workspace"
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+description = "Fail if anything is unformatted"
+run = "cargo fmt --all --check"
+
+[tasks.test]
+description = "Every test of the workspace"
+run = "cargo test --workspace --offline"
+
+[tasks.verify]
+description = "Everything to run before calling work done: lint, format, tests"
+run = ["mise run lint", "mise run fmt:check", "mise run test"]
