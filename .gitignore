@@ -1,0 +1,7 @@
+/target/
+/.claude/
+/.idea/
+# Agent and development notes are kept locally.
+/AGENTS.md
+/CLAUDE.md
+/dev/
