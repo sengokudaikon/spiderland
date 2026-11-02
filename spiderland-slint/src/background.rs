@@ -1,5 +1,6 @@
 //! Work that must not hold the UI thread. It runs on the app's pool and comes back on the event loop as an intent.
 
+use crate::wake::{Dropping, droppable};
 use spiderland::{Intents, Panicked};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -104,6 +105,29 @@ impl Background {
             let result = work.await;
             intents.send(then(result));
         });
+    }
+
+    /// Waits for `work` on the UI thread and hands its result to `then`, whatever else happens. Nothing can stop it, so it suits
+    /// a result that must always be heard, such as whether a write went through. Work that may be let go of goes through
+    /// [`Background::local`]. Call it from the UI thread.
+    pub fn finish<T: 'static>(&self, work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) {
+        let delivered = self.accepted();
+        // Fails only where no event loop can ever run, and then nothing could show the result anyway.
+        let _ = slint::spawn_local(async move {
+            let _delivered = delivered;
+            then(work.await);
+        });
+    }
+
+    /// Waits for `work` on the UI thread, then hands its result to `then`. Dropping the returned guard drops the work instead.
+    /// Unlike aborting a task, that is safe at any moment, including from inside `then`: a store's reducer runs there, and what it
+    /// asks for may be to let go of this very work. Call it from the UI thread.
+    pub fn local<T: 'static>(&self, work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) -> Dropping {
+        let delivered = self.accepted();
+        droppable(work, move |result| {
+            let _delivered = delivered;
+            then(result);
+        })
     }
 
     fn accepted(&self) -> Delivered {

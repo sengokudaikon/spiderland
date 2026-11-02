@@ -17,6 +17,7 @@ A feature crate takes `spiderland` and `spiderland-phrases` and stays free of Sl
 | `Feature` | `spiderland` | The pure half: `reduce(state, intent, effects)` |
 | `Host` | `spiderland` | The impure half: `render` the state, `perform` the effects |
 | `Store` | `spiderland` | Runs the two on the UI thread and queues intents sent while it works |
+| `Store::ask` | `spiderland` | Sends an intent and reads what it did, for a view callback that returns a value |
 | `Tracked`, `Slice` | `spiderland` | Redo only the parts of a render whose inputs changed |
 | `CheckedSlice` | `spiderland` | A `Slice` that fails a test build when its key misses an input |
 | `Subscriptions` | `spiderland` | Timers and watchers that run for as long as the state wants them |
@@ -25,8 +26,8 @@ A feature crate takes `spiderland` and `spiderland-phrases` and stays free of Sl
 | `callbacks!` | `spiderland` | A view's callbacks as intents, one per line |
 | `Background` | `spiderland-slint` | Work off the UI thread, on the app's own pool, that comes back as an intent, with panics as values |
 | `Background::wait` | `spiderland-slint` | An answer awaited on the UI thread, with no pool thread held, that comes back as an intent |
-| `local` | `spiderland-slint` | Waiting on the UI thread for work that can be let go of, even from what its own result causes |
-| `finish` | `spiderland-slint` | Waiting on the UI thread for work whose result must always be heard |
+| `Background::local` | `spiderland-slint` | Waiting on the UI thread for work that can be let go of, even from what its own result causes |
+| `Background::finish` | `spiderland-slint` | Waiting on the UI thread for work whose result must always be heard |
 | `on_watch`, `on_wake` | `spiderland-slint` | A service on another thread telling a feature that something changed |
 | `every`, `after` | `spiderland-slint` | A repeating intent, and a delayed one that makes a debounce |
 | `Rows` | `spiderland-slint` | A list model updated row by row, so a row under the pointer survives |

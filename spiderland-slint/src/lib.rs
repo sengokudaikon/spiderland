@@ -1,9 +1,9 @@
 //! What a Slint [`spiderland::Host`] needs to do its work, built on Slint's event loop.
 //!
-//! - [`Background`]: work off the UI thread whose result comes back as an intent.
+//! - [`Background`]: work off the UI thread whose result comes back as an intent, and waiting on the UI thread, for work that
+//!   can be let go of ([`Background::local`]) and for work that can't ([`Background::finish`]).
 //! - [`every`] and [`after`]: a repeating intent and a delayed one, each ending with the timer it returns.
 //! - [`on_wake`] and [`on_watch`]: a service on another thread telling a feature that something changed.
-//! - [`local`] and [`finish`]: waiting on the UI thread, for work that can be let go of and for work that can't.
 //! - [`Rows`]: a list model updated row by row, so a row being dragged or typed in survives its neighbours' changes.
 //! - [`select_language`]: the user's language, for the views and the phrases alike.
 //! - `testing`, behind that feature: the real window with no display, driven by real input.
@@ -16,7 +16,7 @@ mod wake;
 
 pub use background::{Background, Job};
 pub use rows::Rows;
-pub use wake::{Dropping, Listening, Waker, finish, local, on_wake, on_watch};
+pub use wake::{Dropping, Listening, Waker, on_wake, on_watch};
 
 use slint::{Timer, TimerMode};
 use spiderland::Intents;

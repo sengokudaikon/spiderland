@@ -2,7 +2,7 @@
 
 use spiderland::{Effects, Feature, Host, Intents, Panicked, Store, Subscriptions};
 use spiderland_slint::testing::{Headless, advance, settle, until};
-use spiderland_slint::{Background, Dropping, Listening, after, every, finish, local, on_wake, on_watch};
+use spiderland_slint::{Background, Dropping, Listening, after, every, on_wake, on_watch};
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -216,33 +216,38 @@ fn work_and_timers_come_back_as_intents_on_the_ui_thread() {
     let (answer, answered) = oneshot::channel();
     let got = Rc::new(RefCell::new(None));
     let taken = got.clone();
-    let finished = local(answered, move |result: Result<i32, _>| *taken.borrow_mut() = Some(result.unwrap()));
+    let finished = background.local(answered, move |result: Result<i32, _>| *taken.borrow_mut() = Some(result.unwrap()));
     settle();
     assert!(!finished.is_finished());
+    assert_eq!(background.pending(), 1, "a test waits for work waited on here too");
     answer.send(5).unwrap();
     until("the answer", || got.borrow().is_some());
     assert_eq!(*got.borrow(), Some(5));
     assert!(finished.is_finished());
+    assert_eq!(background.pending(), 0);
 
     // Dropping the guard drops the work, whose owner can tell, and its result goes nowhere.
     let (answer, answered) = oneshot::channel::<i32>();
     let got = Rc::new(RefCell::new(None));
     let taken = got.clone();
-    let dropped = local(answered, move |result| *taken.borrow_mut() = Some(result.unwrap()));
+    let dropped = background.local(answered, move |result| *taken.borrow_mut() = Some(result.unwrap()));
     settle();
     drop(dropped);
     until("letting go", || answer.is_closed());
     assert!(got.borrow().is_none());
+    assert_eq!(background.pending(), 0, "work let go of is no longer waited for");
 
     // Work that must be heard hands over its result with no guard to drop.
     let (answer, answered) = oneshot::channel();
     let got = Rc::new(RefCell::new(None));
     let taken = got.clone();
-    finish(answered, move |result: Result<i32, _>| *taken.borrow_mut() = Some(result.unwrap()));
+    background.finish(answered, move |result: Result<i32, _>| *taken.borrow_mut() = Some(result.unwrap()));
     settle();
+    assert_eq!(background.pending(), 1, "the answer has yet to come");
     answer.send(6).unwrap();
     until("the answer", || got.borrow().is_some());
     assert_eq!(*got.borrow(), Some(6));
+    assert_eq!(background.pending(), 0);
 
     // What its own result causes can let go of the work, as a reducer does: nothing wedges.
     let (answer, answered) = oneshot::channel::<i32>();
@@ -250,7 +255,7 @@ fn work_and_timers_come_back_as_intents_on_the_ui_thread() {
     let held = guard.clone();
     let done = Rc::new(RefCell::new(false));
     let saw = done.clone();
-    *guard.borrow_mut() = Some(local(answered, move |_| {
+    *guard.borrow_mut() = Some(background.local(answered, move |_| {
         drop(held.borrow_mut().take());
         *saw.borrow_mut() = true;
     }));
