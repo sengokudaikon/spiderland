@@ -15,6 +15,7 @@
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
 | `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |
 | `Tracked`, `Slice` | Redo only the parts of a render whose inputs changed. |
+| `Slice::show`, `Input` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none can be left out. |
 | `CheckedSlice` | A `Slice` that fails a test build when its key misses an input. |
 | `Subscriptions` | Keep timers and watchers running for as long as the state wants them. |
 | `Effects::scoped` | Runs a child scope's reducer inside its parent's. |

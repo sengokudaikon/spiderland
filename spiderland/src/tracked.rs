@@ -66,7 +66,7 @@ impl<T> DerefMut for Tracked<T> {
 
 /// One part of a render, redone only when its key changes. The key is usually the versions of what that part reads:
 /// `(drafts.version(), writes.version())`. A key missing an input shows stale values, so keep it beside the function it
-/// guards, which should take only those inputs.
+/// guards, which should take only those inputs. [`Slice::show`] makes the key from that function's inputs, so it can't miss one.
 #[derive(Debug)]
 pub struct Slice<K> {
     key: Option<K>,
@@ -88,7 +88,157 @@ impl<K: PartialEq> Slice<K> {
         apply();
         true
     }
+
+    /// Makes a value from `inputs` and hands it to `apply`, on the first call and whenever their key differs from the last one.
+    /// True when it ran.
+    ///
+    /// `make` is a plain `fn`, so it reads only what it is given, and the key is made from the same inputs. An input left out
+    /// can't be read, so it can't be missing from the key. It can still read statics, such as the language shown, which is set
+    /// once per process.
+    ///
+    /// ```
+    /// use spiderland::{Slice, Tracked};
+    ///
+    /// fn summary(names: &Tracked<Vec<&str>>, limit: usize) -> String {
+    ///     names.iter().take(limit).copied().collect::<Vec<_>>().join(", ")
+    /// }
+    ///
+    /// let mut names = Tracked::new(vec!["a", "b", "c"]);
+    /// let mut slice = Slice::default();
+    /// let mut shown = String::new();
+    /// slice.show((&names, 2), summary, |text| shown = text);
+    /// assert_eq!(shown, "a, b");
+    /// names.push("d");
+    /// slice.show((&names, 3), summary, |text| shown = text);
+    /// assert_eq!(shown, "a, b, c");
+    /// ```
+    ///
+    /// A `make` that reads something it isn't given doesn't build, because a closure that captures can't be a `fn`:
+    ///
+    /// ```compile_fail,E0308
+    /// # use spiderland::{Slice, Tracked};
+    /// let names = Tracked::new(vec!["a", "b", "c"]);
+    /// let limit = Tracked::new(2);
+    /// let mut slice = Slice::default();
+    /// slice.show(&names, |names| names.len().min(*limit), |_| {});
+    /// ```
+    pub fn show<I: Inputs<Key = K>, V>(&mut self, inputs: I, make: I::Make<V>, apply: impl FnOnce(V)) -> bool {
+        let key = inputs.key();
+        if self.key.as_ref() == Some(&key) {
+            return false;
+        }
+        self.key = Some(key);
+        apply(inputs.make(make));
+        true
+    }
 }
+
+/// One thing a [`Slice::show`] reads, and the part of its key that says when it changed. A [`Tracked`] gives its version, and a
+/// plain `Copy` value, such as a flag or a count, gives itself.
+///
+/// A type that keeps its own count of changes can give that count. Implement it on a reference, so the function gets the whole
+/// value:
+///
+/// ```
+/// struct Session {
+///     generation: u64,
+///     ready: bool,
+/// }
+///
+/// impl spiderland::Input for &Session {
+///     type Key = u64;
+///
+///     fn key(&self) -> u64 {
+///         self.generation
+///     }
+/// }
+/// ```
+///
+/// A reference is always `Copy`, so a reference to a `PartialEq` type already gives itself, and this impl would clash with that
+/// one. For such a type, implement it on a wrapper of your own.
+pub trait Input {
+    type Key: PartialEq;
+
+    fn key(&self) -> Self::Key;
+}
+
+// This and the impl below don't overlap only because `Tracked` isn't `PartialEq`. Don't derive it.
+impl<T> Input for &Tracked<T> {
+    type Key = Version;
+
+    fn key(&self) -> Version {
+        self.version
+    }
+}
+
+impl<T: Copy + PartialEq> Input for T {
+    type Key = T;
+
+    fn key(&self) -> T {
+        *self
+    }
+}
+
+/// What a [`Slice::show`] reads: one [`Tracked`], or a tuple of up to six [`Input`]s. `Make` is the `fn` that takes them.
+pub trait Inputs {
+    type Key: PartialEq;
+    type Make<V>;
+
+    fn key(&self) -> Self::Key;
+
+    fn make<V>(self, make: Self::Make<V>) -> V;
+}
+
+impl<'a, T> Inputs for &'a Tracked<T> {
+    type Key = Version;
+    type Make<V> = fn(&'a Tracked<T>) -> V;
+
+    fn key(&self) -> Version {
+        self.version
+    }
+
+    fn make<V>(self, make: Self::Make<V>) -> V {
+        make(self)
+    }
+}
+
+/// One input of any kind. Its key is that input's own, not a tuple, like a lone [`Tracked`]'s, so a `Slice<Version>` takes
+/// either.
+impl<A: Input> Inputs for (A,) {
+    type Key = A::Key;
+    type Make<V> = fn(A) -> V;
+
+    fn key(&self) -> A::Key {
+        self.0.key()
+    }
+
+    fn make<V>(self, make: Self::Make<V>) -> V {
+        make(self.0)
+    }
+}
+
+macro_rules! inputs {
+    ($($input:ident $index:tt),+) => {
+        impl<$($input: Input),+> Inputs for ($($input,)+) {
+            type Key = ($($input::Key,)+);
+            type Make<V> = fn($($input),+) -> V;
+
+            fn key(&self) -> Self::Key {
+                ($(self.$index.key(),)+)
+            }
+
+            fn make<V>(self, make: Self::Make<V>) -> V {
+                make($(self.$index),+)
+            }
+        }
+    };
+}
+
+inputs!(A 0, B 1);
+inputs!(A 0, B 1, C 2);
+inputs!(A 0, B 1, C 2, D 3);
+inputs!(A 0, B 1, C 2, D 3, E 4);
+inputs!(A 0, B 1, C 2, D 3, E 4, F 5);
 
 /// A [`Slice`] that makes a value before showing it, and so can check itself. In a test build, whenever the key says nothing
 /// changed it makes the value anyway and panics if it differs from what is showing: a key missing an input fails there
@@ -200,6 +350,36 @@ mod tests {
         value.set(2);
         assert_ne!(value.version(), start);
         assert_eq!(*value, 2);
+    }
+
+    #[test]
+    fn a_slice_shows_again_when_any_input_changes() {
+        fn total(values: &Tracked<Vec<i32>>, scale: i32) -> i32 {
+            values.iter().sum::<i32>() * scale
+        }
+        let mut values = Tracked::new(vec![1, 2]);
+        let mut slice = Slice::default();
+        let mut shown = Vec::new();
+        assert!(slice.show((&values, 1), total, |total| shown.push(total)));
+        assert!(!slice.show((&values, 1), total, |total| shown.push(total)));
+        assert!(slice.show((&values, 10), total, |total| shown.push(total)));
+        values.push(3);
+        assert!(slice.show((&values, 10), total, |total| shown.push(total)));
+        assert_eq!(shown, [3, 30, 60]);
+    }
+
+    #[test]
+    fn a_slice_of_one_input_keys_on_it_alone() {
+        let mut values = Tracked::new(vec![1]);
+        let mut slice: Slice<Version> = Slice::default();
+        let mut shown = 0;
+        slice.show(&values, |values| values.len(), |len| shown = len);
+        values.push(2);
+        slice.show(&values, |values| values.len(), |len| shown = len);
+        assert_eq!(shown, 2);
+        let mut count: Slice<u8> = Slice::default();
+        assert!(count.show((4u8,), |count| count * 2, |_| {}));
+        assert!(!count.show((4u8,), |count| count * 2, |_| {}));
     }
 
     #[test]

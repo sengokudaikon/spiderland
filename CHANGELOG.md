@@ -28,6 +28,8 @@ tag makes a GitHub release from that version's section.
 - `spiderland-slint`: `InnerRows`, a list inside each row, with one stable model per row. It works around a Slint 1.18.1 bug that
   keeps an inner change off the screen while its outer row has an update not yet painted.
 - `docs/writing-a-page.md`: rules for text boxes, `changed` and lists inside rows, each checked against a real view.
+- `spiderland`: `Slice::show`, with `Input` and `Inputs`. It makes a part of a render with a plain `fn` of what it reads, and keys
+  it on the same inputs, so none can be left out.
 
 ### Changed
 

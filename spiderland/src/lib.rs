@@ -90,4 +90,4 @@ pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::Pulse;
 pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Step, Store, start, step};
 pub use subscriptions::Subscriptions;
-pub use tracked::{CheckedSlice, Slice, Tracked, Version};
+pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};
