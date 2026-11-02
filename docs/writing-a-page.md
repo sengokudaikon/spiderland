@@ -19,6 +19,7 @@ Put it next to the feature.
 
 - It takes only what it reads, and returns plain structs.
 - Keep what it reads in `Tracked`, so a render can tell when it needs to run again.
+- Make it a plain `fn` and run it with `Slice::show`, which keys it on its own inputs.
 
 ## 3. Host
 
@@ -54,7 +55,9 @@ pool, which can keep a record of it.
 
 **Slice keys**
 
-A `Slice` key that leaves out an input shows stale values. Keep the key beside the function it guards.
+A `Slice` key that leaves out an input shows stale values. `Slice::show` can't leave one out, because its `fn` reads only what the
+key is made from. A function that reads through a whole editor can't be given its inputs one by one: keep its key beside it, and use
+`CheckedSlice`, which fails a test when the key misses an input.
 
 **Text boxes**
 
