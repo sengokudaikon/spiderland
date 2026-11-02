@@ -23,6 +23,11 @@ tag makes a GitHub release from that version's section.
 - `spiderland`: `Feature::start`, which sets up the first state and asks for effects before the first render, and `start` to test it.
 - `spiderland`: `Intents::map`, so a child's host can run inside its parent's store.
 - `spiderland`: `Lifecycle`, `CloseAnswer` and `Closing`, so a parent can show and hide its children and ask whether they can close.
+- `spiderland`: `Pulse`, a one-shot command to a view with properties and no events.
+- `spiderland-slint`: `Rows::sync_by`, which matches rows by key, so a row's focus follows its item when rows before it come or go.
+- `spiderland-slint`: `InnerRows`, a list inside each row, with one stable model per row. It works around a Slint 1.18.1 bug that
+  keeps an inner change off the screen while its outer row has an update not yet painted.
+- `docs/writing-a-page.md`: rules for text boxes, `changed` and lists inside rows, each checked against a real view.
 
 ### Changed
 
