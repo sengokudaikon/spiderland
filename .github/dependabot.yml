@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+    # Pinned exactly on purpose: moving one is a decision, not a routine update.
+    ignore:
+      - dependency-name: slint
+      - dependency-name: tokio
+      - dependency-name: rspolib
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
