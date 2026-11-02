@@ -9,6 +9,9 @@ Put it in a crate without Slint.
 - State is plain data.
 - Anything that touches a disk, a process or a worker is an `Effect`. Its result comes back as an `Intent`.
 - Anything from outside, such as a worker's snapshot, arrives as an intent and is kept in the state.
+- First loads go in `Feature::start`, not in intents the host sends after building the store.
+- To tell another feature something, `emit` an `Output`. Whoever builds the two stores connects them with `Store::forward`, straight
+  after building them.
 
 ## 2. `present`
 

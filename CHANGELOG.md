@@ -18,5 +18,16 @@ tag makes a GitHub release from that version's section.
 - `spiderland-slint`: `Background`, `every`, `after`, `on_watch`, `on_wake`, `Rows`, `select_language` and `testing`.
 - `spiderland-phrases`: `phrases!`, `Phrase`, `Plural`, `list`, `Translations` and `locale`.
 - `spiderland-phrases-build`: `bundle_catalogs` and `Template`.
+- `spiderland`: `Feature::Output`, `Effects::emit` and `Store::forward`, so a feature can tell others something. An output goes out
+  after its batch's render and effects, and one emitted before there is a listener reaches no one.
+- `spiderland`: `Feature::start`, which sets up the first state and asks for effects before the first render, and `start` to test it.
+- `spiderland`: `Intents::map`, so a child's host can run inside its parent's store.
+- `spiderland`: `Lifecycle`, `CloseAnswer` and `Closing`, so a parent can show and hide its children and ask whether they can close.
+
+### Changed
+
+- **Breaking:** `Feature` requires `type Output`. A feature that tells no one adds `type Output = Never;`. Its `reduce` signature can
+  stay as it is.
+- **Breaking:** `step` returns `Step { effects, outputs }`. Where a test used the result as a list of effects, read `.effects`.
 
 [Unreleased]: https://github.com/sengokudaikon/spiderland/commits/main
