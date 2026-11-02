@@ -17,6 +17,16 @@ run = "cargo fmt --all --check"
 description = "Every test of the workspace"
 run = "cargo test --workspace --offline"
 
+[tasks.doc]
+description = "Build the docs, warnings as errors"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc --workspace --no-deps --offline"
+
+[tasks.deny]
+description = "Check dependencies for advisories, licenses and sources. Needs the network"
+tools = { "aqua:EmbarkStudios/cargo-deny" = "0.20.2" }
+run = "cargo deny --locked check"
+
 [tasks.verify]
-description = "Everything to run before calling work done: lint, format, tests"
-run = ["mise run lint", "mise run fmt:check", "mise run test"]
+description = "Everything to run before calling work done: lint, format, tests, docs"
+run = ["mise run lint", "mise run fmt:check", "mise run test", "mise run doc"]
