@@ -4,7 +4,8 @@
 //!   can be let go of ([`Background::local`]) and for work that can't ([`Background::finish`]).
 //! - [`every`] and [`after`]: a repeating intent and a delayed one, each ending with the timer it returns.
 //! - [`on_wake`] and [`on_watch`]: a service on another thread telling a feature that something changed.
-//! - [`Rows`]: a list model updated row by row, so a row being dragged or typed in survives its neighbours' changes.
+//! - [`Rows`]: a list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. [`InnerRows`]
+//!   keeps a list inside each row.
 //! - [`select_language`]: the user's language, for the views and the phrases alike.
 //! - `testing`, behind that feature: the real window with no display, driven by real input.
 
@@ -15,7 +16,7 @@ pub mod testing;
 mod wake;
 
 pub use background::{Background, Job};
-pub use rows::Rows;
+pub use rows::{InnerRows, Rows};
 pub use wake::{Dropping, Listening, Waker, on_wake, on_watch};
 
 use slint::{Timer, TimerMode};

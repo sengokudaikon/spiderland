@@ -13,6 +13,7 @@
 | `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, and ask whether they can close. |
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
+| `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |
 | `Tracked`, `Slice` | Redo only the parts of a render whose inputs changed. |
 | `CheckedSlice` | A `Slice` that fails a test build when its key misses an input. |
 | `Subscriptions` | Keep timers and watchers running for as long as the state wants them. |
@@ -33,6 +34,8 @@
 | `every` | Sends an intent repeatedly until its timer is dropped. |
 | `after` | Sends an intent once after a delay. Keep the timer in one place and it debounces. |
 | `Rows` | A list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. |
+| `Rows::sync_by` | Matches rows by key, so a row's focus follows its item when rows before it come or go. |
+| `InnerRows` | Keeps a list inside each row, with one stable model per row, and works around a Slint bug that can lose its changes. |
 | `select_language` | Picks the user's language for the views and the phrases alike. |
 | `testing` | The real window with no display, driven by real input. Behind the `testing` feature. |
 

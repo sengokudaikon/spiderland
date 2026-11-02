@@ -33,6 +33,7 @@ Put it in the crate with the window.
 - Components take properties and callbacks.
 - Only the page root reads the page's global.
 - What only the view cares about, such as hover, highlights and scroll, stays in Slint.
+- A one-shot command, such as "focus this", is a `Pulse`: the view acts when its serial changes.
 
 ## 5. Tests
 
@@ -54,6 +55,36 @@ pool, which can keep a record of it.
 **Slice keys**
 
 A `Slice` key that leaves out an input shows stale values. Keep the key beside the function it guards.
+
+**Text boxes**
+
+User input removes a one-way binding on `TextInput.text`, so the box stops following its property. A wrapper has to copy the
+property back:
+
+```slint
+in property <string> value;
+in property <int> refused;
+changed value => { input.text = value; }
+changed refused => { input.text = value; }
+```
+
+The second line is for a reducer that can refuse an edit. A refusal leaves the state's text as it was, so `changed value` never
+runs and the box keeps the refused text. Fire a `Pulse` from the reducer and set `refused` to its serial.
+
+**`changed`**
+
+It runs on a later turn of the event loop, and repeats collapse into one. What it sends arrives as a separate intent, after the
+render that caused it.
+
+**Lists inside rows**
+
+Use `rows.sync(inner.fill(…))`. A plain `Rows` in a row can lose a change: in Slint 1.18.1, while the outer row has an update not yet
+painted, an inner item changed in place stays old on screen. Two renders with no paint between them are enough. `InnerRows` gets
+the change onto the screen.
+
+**What Rust can reach**
+
+Rust reaches only exported components and globals. So one feature maps to one global, and one instance per window.
 
 **Slint names**
 
