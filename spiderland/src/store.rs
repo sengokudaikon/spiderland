@@ -85,6 +85,8 @@ struct Inner<F: Feature> {
     state: RefCell<F::State>,
     host: RefCell<Box<dyn Host<F>>>,
     queue: RefCell<VecDeque<F::Intent>>,
+    /// Effects of reduced intents, waiting for the render that goes before them.
+    effects: RefCell<VecDeque<F::Effect>>,
     draining: Cell<bool>,
     this: Weak<Inner<F>>,
 }
@@ -100,24 +102,33 @@ impl<F: Feature> Clone for Store<F> {
 }
 
 impl<F: Feature> Store<F> {
-    /// Starts the store and renders the first state.
+    /// Starts the store and renders the first state. An intent sent from that render runs right after it.
     pub fn new(state: F::State, host: impl Host<F>) -> Self {
         let inner = Rc::new_cyclic(|this| Inner {
             state: RefCell::new(state),
             host: RefCell::new(Box::new(host) as Box<dyn Host<F>>),
             queue: RefCell::new(VecDeque::new()),
+            effects: RefCell::new(VecDeque::new()),
             draining: Cell::new(false),
             this: this.clone(),
         });
-        let intents = inner.intents();
-        inner.host.borrow_mut().render(&inner.state.borrow(), &intents);
+        inner.render_first();
+        inner.drain();
         Store(inner)
     }
 
-    /// Handles `intent` now, unless the store is already at work (a render's setter fired a callback, an effect finished
-    /// at once): then it runs next, after the current batch. State is never borrowed twice.
+    /// Handles `intent` now, unless the store is already at work (a render or an effect called back into the view, an effect
+    /// finished at once): then it runs next, after the current batch. State is never borrowed twice.
     pub fn send(&self, intent: F::Intent) {
         Sink::send(&*self.0, intent);
+    }
+
+    /// Sends `intent` and reads what it did, for a view callback that returns a value. None while the store is at work: the
+    /// intent is then only queued and will still run, and the state doesn't show its result yet.
+    pub fn ask<R>(&self, intent: F::Intent, read: impl FnOnce(&F::State) -> R) -> Option<R> {
+        let queued = self.0.draining.get();
+        self.send(intent);
+        if queued { None } else { self.try_read(read) }
     }
 
     pub fn intents(&self) -> Intents<F::Intent> {
@@ -131,7 +142,7 @@ impl<F: Feature> Store<F> {
     }
 
     /// Answers a view's question from the state, for a pure callback that a binding calls. None while a reducer is running,
-    /// which a binding can only meet if a reducer made the toolkit evaluate one.
+    /// which a binding can only meet if a reducer made the toolkit evaluate one. To read what an intent did, use [`Store::ask`].
     pub fn try_read<R>(&self, read: impl FnOnce(&F::State) -> R) -> Option<R> {
         self.0.state.try_borrow().ok().map(|state| read(&state))
     }
@@ -143,19 +154,17 @@ impl<F: Feature> Inner<F> {
         Intents(sink)
     }
 
+    fn render_first(&self) {
+        let _draining = Draining::start(&self.draining);
+        self.host.borrow_mut().render(&self.state.borrow(), &self.intents());
+    }
+
+    /// A panic leaves what it didn't reach for the next drain: intents still queued, and the effects of intents already reduced,
+    /// whose state changes stand. The effects of the intent whose reducer panicked go with it.
     fn drain(&self) {
-        // Resets on a panic too, so a reducer that panics under a test harness doesn't wedge the store.
-        struct Draining<'a>(&'a Cell<bool>);
-        impl Drop for Draining<'_> {
-            fn drop(&mut self) {
-                self.0.set(false);
-            }
-        }
-        self.draining.set(true);
-        let _draining = Draining(&self.draining);
+        let _draining = Draining::start(&self.draining);
         let intents = self.intents();
         loop {
-            let mut effects = Effects(Vec::new());
             let mut any = false;
             loop {
                 // The queue's borrow ends before the reducer runs.
@@ -163,18 +172,41 @@ impl<F: Feature> Inner<F> {
                 let Some(intent) = next else {
                     break;
                 };
+                let mut effects = Effects(Vec::new());
                 F::reduce(&mut self.state.borrow_mut(), intent, &mut effects);
+                self.effects.borrow_mut().extend(effects.0);
                 any = true;
             }
-            if !any {
+            if !any && self.effects.borrow().is_empty() {
                 return;
             }
             let mut host = self.host.borrow_mut();
             host.render(&self.state.borrow(), &intents);
-            for effect in effects.0 {
+            loop {
+                // The effects' borrow ends before the host runs.
+                let next = self.effects.borrow_mut().pop_front();
+                let Some(effect) = next else {
+                    break;
+                };
                 host.perform(effect, &intents);
             }
         }
+    }
+}
+
+/// Marks a store as at work. Resets on a panic too, so a reducer that panics under a test harness doesn't wedge the store.
+struct Draining<'a>(&'a Cell<bool>);
+
+impl<'a> Draining<'a> {
+    fn start(draining: &'a Cell<bool>) -> Self {
+        draining.set(true);
+        Draining(draining)
+    }
+}
+
+impl Drop for Draining<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
     }
 }
 
@@ -219,7 +251,7 @@ mod tests {
     #[derive(Default)]
     struct Log {
         renders: Vec<i32>,
-        /// Sent from inside the next render, as a Slint setter firing a callback would.
+        /// Sent from inside the next render, as a call into the view that comes back at once would.
         send_from_render: Option<i32>,
     }
 
@@ -305,6 +337,100 @@ mod tests {
         assert!(panicked.is_err());
         store.send(false);
         assert_eq!(shown.get(), 1);
+    }
+
+    #[test]
+    fn an_intent_sent_from_the_first_render_runs_right_after_it() {
+        let log = Rc::new(RefCell::new(Log {
+            send_from_render: Some(4),
+            ..Log::default()
+        }));
+        let _store = Store::new(0, Recording(log.clone()));
+        assert_eq!(log.borrow().renders, [0, 4]);
+    }
+
+    /// Asks the store from inside an effect, as a view callback reached from `perform` would.
+    struct Asking {
+        store: Rc<RefCell<Option<Store<Counter>>>>,
+        heard: Rc<Cell<Option<Option<i32>>>>,
+    }
+
+    impl Host<Counter> for Asking {
+        fn render(&mut self, _: &i32, _: &Intents<Intent>) {}
+
+        fn perform(&mut self, _: Effect, _: &Intents<Intent>) {
+            let store = self.store.borrow().clone().unwrap();
+            self.heard.set(Some(store.ask(Intent::Add(10), |state| *state)));
+        }
+    }
+
+    #[test]
+    fn asking_answers_with_the_state_the_intent_left() {
+        let (store, _log) = store();
+        assert_eq!(store.ask(Intent::Add(2), |state| *state), Some(2));
+    }
+
+    #[test]
+    fn asking_while_the_store_is_at_work_answers_nothing_and_the_intent_still_runs() {
+        let slot: Rc<RefCell<Option<Store<Counter>>>> = Rc::default();
+        let heard: Rc<Cell<Option<Option<i32>>>> = Rc::default();
+        let store = Store::new(
+            1,
+            Asking {
+                store: Rc::clone(&slot),
+                heard: Rc::clone(&heard),
+            },
+        );
+        *slot.borrow_mut() = Some(store.clone());
+        store.send(Intent::AddLater(0));
+        assert_eq!(heard.get(), Some(None), "the old state is no answer to this intent");
+        assert_eq!(store.try_read(|state| *state), Some(11));
+        *slot.borrow_mut() = None;
+    }
+
+    #[test]
+    fn effects_before_a_panic_in_the_batch_still_go_out() {
+        struct Fragile;
+        impl Feature for Fragile {
+            type State = i32;
+            type Intent = Option<i32>;
+            type Effect = i32;
+            fn reduce(state: &mut i32, intent: Option<i32>, effects: &mut Effects<i32>) {
+                effects.push(-1);
+                let by = intent.expect("this intent panics");
+                *state += by;
+                effects.push(by);
+            }
+        }
+        #[derive(Default)]
+        struct Seen {
+            performed: Vec<i32>,
+            batch: bool,
+        }
+        struct Batching(Rc<RefCell<Seen>>);
+        impl Host<Fragile> for Batching {
+            fn render(&mut self, _: &i32, intents: &Intents<Option<i32>>) {
+                if std::mem::take(&mut self.0.borrow_mut().batch) {
+                    intents.send(Some(5));
+                    intents.send(None);
+                }
+            }
+            fn perform(&mut self, effect: i32, _: &Intents<Option<i32>>) {
+                self.0.borrow_mut().performed.push(effect);
+            }
+        }
+        let seen = Rc::new(RefCell::new(Seen::default()));
+        let store = Store::new(0, Batching(Rc::clone(&seen)));
+        seen.borrow_mut().batch = true;
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.send(Some(0))));
+        assert!(panicked.is_err());
+        seen.borrow_mut().performed.clear();
+        store.send(Some(1));
+        assert_eq!(
+            seen.borrow().performed,
+            [-1, 5, -1, 1],
+            "the intent before the panic keeps its effects, and the one that panicked loses its own"
+        );
     }
 
     /// A scope is a state inside a state: the parent forwards the intent and maps the child's effects.
