@@ -83,6 +83,7 @@ spiderland-slint = { git = "https://github.com/sengokudaikon/spiderland" }
 - [Features](docs/features.md): everything the crates provide.
 - [Writing a page](docs/writing-a-page.md): a feature, its host and its view, step by step.
 - [Translation](docs/translation.md): words in views and in Rust, and how they reach translators.
+- [Changelog](CHANGELOG.md): what changed in each version, and what a breaking change asks of you.
 
 ## License
 
