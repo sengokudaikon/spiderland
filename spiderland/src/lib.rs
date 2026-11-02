@@ -12,7 +12,7 @@
 //! A whole feature, with the host a test or a window would give it:
 //!
 //! ```
-//! use spiderland::{Effects, Feature, Host, Intents, Store, callbacks};
+//! use spiderland::{Effects, Feature, Host, Intents, Never, Store, callbacks};
 //!
 //! struct Counter;
 //! enum Intent {
@@ -33,6 +33,7 @@
 //!     type State = State;
 //!     type Intent = Intent;
 //!     type Effect = Effect;
+//!     type Output = Never;
 //!
 //!     fn reduce(state: &mut State, intent: Intent, effects: &mut Effects<Effect>) {
 //!         match intent {
@@ -46,7 +47,7 @@
 //! // Rules are tested with no host at all.
 //! let mut state = State::default();
 //! spiderland::step::<Counter>(&mut state, Intent::Add(2));
-//! assert!(matches!(spiderland::step::<Counter>(&mut state, Intent::Save)[..], [Effect::Write(2)]));
+//! assert!(matches!(spiderland::step::<Counter>(&mut state, Intent::Save).effects[..], [Effect::Write(2)]));
 //!
 //! // A real host sets a view's properties in `render` and starts background work in `perform`.
 //! struct Shown(std::rc::Rc<std::cell::Cell<(i32, i32)>>);
@@ -65,6 +66,10 @@
 //! assert_eq!(shown.get(), (2, 1));
 //! ```
 //!
+//! Stores talk through outputs. A feature names an [`Output`](Feature::Output), `reduce` calls [`Effects::emit`], and
+//! [`Store::forward`] turns each output into an intent of another store. [`Lifecycle`] is built on them: a parent showing and
+//! hiding its children, and asking whether they can close.
+//!
 //! What this leaves out on purpose:
 //! - **Outside state as a separate input.** A worker's snapshot reaches a feature as an intent and is kept in its state, so
 //!   a render reads one consistent snapshot rather than asking a live handle row by row.
@@ -72,11 +77,13 @@
 //! - **Scope machinery.** A scope is a state inside a state: a parent's `reduce` hands the child its state, intent and
 //!   [`Effects::scoped`]. A scope that ends is an `Option` going back to `None`.
 
+mod lifecycle;
 mod macros;
 mod store;
 mod subscriptions;
 mod tracked;
 
-pub use store::{Effects, Feature, Host, Intents, Panicked, Store, step};
+pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
+pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Step, Store, start, step};
 pub use subscriptions::Subscriptions;
 pub use tracked::{CheckedSlice, Slice, Tracked, Version};

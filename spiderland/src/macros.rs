@@ -8,6 +8,7 @@
 /// #     type State = i32;
 /// #     type Intent = Intent;
 /// #     type Effect = ();
+/// #     type Output = spiderland::Never;
 /// #     fn reduce(state: &mut i32, intent: Intent, _: &mut Effects<()>) {
 /// #         *state += match intent { Intent::Reset => -*state, Intent::Add(a, b) => a + b };
 /// #     }

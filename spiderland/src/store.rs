@@ -12,37 +12,78 @@ pub trait Feature: 'static {
     type Intent: 'static;
     /// Work to do outside the reducer, as data a test can compare.
     type Effect: 'static;
+    /// What this feature tells whoever listens, through [`Store::forward`]. A feature that tells no one says [`Never`].
+    type Output: 'static;
 
-    fn reduce(state: &mut Self::State, intent: Self::Intent, effects: &mut Effects<Self::Effect>);
+    fn reduce(state: &mut Self::State, intent: Self::Intent, effects: &mut Effects<Self::Effect, Self::Output>);
+
+    /// Runs once as the store is built, before the first render. The effects it asks for are performed after that render. It can't
+    /// emit, because nothing can be listening yet. Does nothing unless a feature says otherwise.
+    fn start(state: &mut Self::State, effects: &mut Effects<Self::Effect>) {
+        let _ = (state, effects);
+    }
 }
 
-/// The effects one `reduce` asks for, performed in order after the next render.
-pub struct Effects<E>(Vec<E>);
+/// An output that can't happen, for a feature that tells no one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Never {}
 
-impl<E> Effects<E> {
+/// What one `reduce` asks for. After the next render its effects are performed in order, and then its outputs go out in order.
+pub struct Effects<E, O = Never> {
+    effects: Vec<E>,
+    outputs: Vec<O>,
+}
+
+impl<E, O> Effects<E, O> {
     /// A list no one performs, for code shared with the reducer that only reads when it runs outside it, as a view does.
     pub fn detached() -> Self {
-        Effects(Vec::new())
+        Effects {
+            effects: Vec::new(),
+            outputs: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, effect: E) {
-        self.0.push(effect);
+        self.effects.push(effect);
     }
 
-    /// Runs a child scope's reducer, which lists its own effect type, and wraps each of them as this feature's.
+    /// Tells whoever listens through [`Store::forward`].
+    pub fn emit(&mut self, output: O) {
+        self.outputs.push(output);
+    }
+
+    /// Runs a child scope's reducer, which lists its own effect type, and wraps each of them as this feature's. The child emits
+    /// nothing: telling the outside is up to the parent.
     pub fn scoped<C, R>(&mut self, wrap: impl Fn(C) -> E, child: impl FnOnce(&mut Effects<C>) -> R) -> R {
-        let mut effects = Effects(Vec::new());
+        let mut effects = Effects::detached();
         let result = child(&mut effects);
-        self.0.extend(effects.0.into_iter().map(wrap));
+        self.effects.extend(effects.effects.into_iter().map(wrap));
         result
     }
 }
 
-/// One reducer step, for tests: changes `state` and returns the effects `intent` asked for.
-pub fn step<F: Feature>(state: &mut F::State, intent: F::Intent) -> Vec<F::Effect> {
-    let mut effects = Effects(Vec::new());
+/// What one reducer step asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Step<E, O = Never> {
+    pub effects: Vec<E>,
+    pub outputs: Vec<O>,
+}
+
+/// One reducer step, for tests: changes `state` and returns what `intent` asked for.
+pub fn step<F: Feature>(state: &mut F::State, intent: F::Intent) -> Step<F::Effect, F::Output> {
+    let mut effects = Effects::detached();
     F::reduce(state, intent, &mut effects);
-    effects.0
+    Step {
+        effects: effects.effects,
+        outputs: effects.outputs,
+    }
+}
+
+/// [`Feature::start`], for tests: changes `state` and returns the effects it asked for.
+pub fn start<F: Feature>(state: &mut F::State) -> Vec<F::Effect> {
+    let mut effects = Effects::detached();
+    F::start(state, &mut effects);
+    effects.effects
 }
 
 /// Background work panicked. Finished work hands this to its feature, which decides what the failure means there: a
@@ -61,11 +102,41 @@ pub trait Host<F: Feature>: 'static {
 
 trait Sink<I> {
     fn send(&self, intent: I);
+    fn is_alive(&self) -> bool;
+}
+
+/// A store's own intents, for as long as the store lives.
+impl<F: Feature> Sink<F::Intent> for Weak<Inner<F>> {
+    fn send(&self, intent: F::Intent) {
+        if let Some(inner) = self.upgrade() {
+            inner.accept(intent);
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        self.strong_count() > 0
+    }
+}
+
+/// A child's intents, turned into its parent's.
+struct Mapped<I, M> {
+    to: Intents<I>,
+    map: M,
+}
+
+impl<C, I, M: Fn(C) -> I> Sink<C> for Mapped<I, M> {
+    fn send(&self, intent: C) {
+        self.to.send((self.map)(intent));
+    }
+
+    fn is_alive(&self) -> bool {
+        self.to.is_alive()
+    }
 }
 
 /// Where intents go. It doesn't keep the store alive, so a timer or a thread holding one can't keep a feature going: once
 /// the store is gone, sends do nothing.
-pub struct Intents<I>(Weak<dyn Sink<I>>);
+pub struct Intents<I>(Rc<dyn Sink<I>>);
 
 impl<I> Clone for Intents<I> {
     fn clone(&self) -> Self {
@@ -75,11 +146,25 @@ impl<I> Clone for Intents<I> {
 
 impl<I> Intents<I> {
     pub fn send(&self, intent: I) {
-        if let Some(sink) = self.0.upgrade() {
-            sink.send(intent);
-        }
+        self.0.send(intent);
+    }
+
+    /// A sender of another type, whose intents `map` turns into these. It suits a child's host inside its parent's store. Like this
+    /// sender, it doesn't keep the store alive.
+    pub fn map<C: 'static>(&self, map: impl Fn(C) -> I + 'static) -> Intents<C>
+    where
+        I: 'static,
+    {
+        Intents(Rc::new(Mapped { to: self.clone(), map }))
+    }
+
+    fn is_alive(&self) -> bool {
+        self.0.is_alive()
     }
 }
+
+/// Hears one output, and says false once no one is left to tell.
+type Listener<O> = Rc<dyn Fn(&O) -> bool>;
 
 struct Inner<F: Feature> {
     state: RefCell<F::State>,
@@ -87,8 +172,12 @@ struct Inner<F: Feature> {
     queue: RefCell<VecDeque<F::Intent>>,
     /// Effects of reduced intents, waiting for the render that goes before them.
     effects: RefCell<VecDeque<F::Effect>>,
+    /// Outputs of reduced intents, waiting for those effects.
+    outputs: RefCell<VecDeque<F::Output>>,
+    listeners: RefCell<Vec<Listener<F::Output>>>,
     draining: Cell<bool>,
-    this: Weak<Inner<F>>,
+    /// Holds only a weak reference to this store.
+    intents: Intents<F::Intent>,
 }
 
 /// Runs a feature on the UI thread. Clones share one store; whoever holds a clone keeps it alive (usually the view's
@@ -102,15 +191,20 @@ impl<F: Feature> Clone for Store<F> {
 }
 
 impl<F: Feature> Store<F> {
-    /// Starts the store and renders the first state. An intent sent from that render runs right after it.
-    pub fn new(state: F::State, host: impl Host<F>) -> Self {
-        let inner = Rc::new_cyclic(|this| Inner {
+    /// Starts the store: runs [`Feature::start`], renders the first state and performs the effects `start` asked for. An intent
+    /// sent from any of that runs right after it.
+    pub fn new(mut state: F::State, host: impl Host<F>) -> Self {
+        let mut effects = Effects::detached();
+        F::start(&mut state, &mut effects);
+        let inner = Rc::new_cyclic(|this: &Weak<Inner<F>>| Inner {
             state: RefCell::new(state),
             host: RefCell::new(Box::new(host) as Box<dyn Host<F>>),
             queue: RefCell::new(VecDeque::new()),
-            effects: RefCell::new(VecDeque::new()),
+            effects: RefCell::new(effects.effects.into()),
+            outputs: RefCell::new(VecDeque::new()),
+            listeners: RefCell::new(Vec::new()),
             draining: Cell::new(false),
-            this: this.clone(),
+            intents: Intents(Rc::new(this.clone())),
         });
         inner.render_first();
         inner.drain();
@@ -120,7 +214,7 @@ impl<F: Feature> Store<F> {
     /// Handles `intent` now, unless the store is already at work (a render or an effect called back into the view, an effect
     /// finished at once): then it runs next, after the current batch. State is never borrowed twice.
     pub fn send(&self, intent: F::Intent) {
-        Sink::send(&*self.0, intent);
+        self.0.accept(intent);
     }
 
     /// Sends `intent` and reads what it did, for a view callback that returns a value. None while the store is at work: the
@@ -132,7 +226,29 @@ impl<F: Feature> Store<F> {
     }
 
     pub fn intents(&self) -> Intents<F::Intent> {
-        self.0.intents()
+        self.0.intents.clone()
+    }
+
+    /// Sends `map(output)` to `to` for each output this store emits, in the order they were forwarded. `map` returns an intent,
+    /// or `None` to ignore that output. It keeps neither store alive, and ends with whichever store goes first.
+    ///
+    /// Forward straight after building the store: an output emitted before there is a listener reaches no one. If `map` needs to
+    /// reach a store, it should hold [`Intents`], because a [`Store`] it holds stays alive for as long as this one does.
+    pub fn forward<I, R>(&self, to: &Intents<I>, map: impl Fn(&F::Output) -> R + 'static)
+    where
+        I: 'static,
+        R: Into<Option<I>>,
+    {
+        let to = to.clone();
+        self.0.listeners.borrow_mut().push(Rc::new(move |output| {
+            if !to.is_alive() {
+                return false;
+            }
+            if let Some(intent) = map(output).into() {
+                to.send(intent);
+            }
+            true
+        }));
     }
 
     /// Runs `change` on the state directly, for a test or a capture to set up or look at a state. Nothing renders until the
@@ -149,21 +265,35 @@ impl<F: Feature> Store<F> {
 }
 
 impl<F: Feature> Inner<F> {
-    fn intents(&self) -> Intents<F::Intent> {
-        let sink: Weak<dyn Sink<F::Intent>> = self.this.clone();
-        Intents(sink)
+    fn accept(&self, intent: F::Intent) {
+        self.queue.borrow_mut().push_back(intent);
+        if !self.draining.get() {
+            self.drain();
+        }
     }
 
     fn render_first(&self) {
         let _draining = Draining::start(&self.draining);
-        self.host.borrow_mut().render(&self.state.borrow(), &self.intents());
+        let mut host = self.host.borrow_mut();
+        host.render(&self.state.borrow(), &self.intents);
+        self.perform_effects(&mut **host);
     }
 
-    /// A panic leaves what it didn't reach for the next drain: intents still queued, and the effects of intents already reduced,
-    /// whose state changes stand. The effects of the intent whose reducer panicked go with it.
+    fn perform_effects(&self, host: &mut dyn Host<F>) {
+        loop {
+            // The effects' borrow ends before the host runs.
+            let next = self.effects.borrow_mut().pop_front();
+            let Some(effect) = next else {
+                break;
+            };
+            host.perform(effect, &self.intents);
+        }
+    }
+
+    /// A panic leaves what it didn't reach for the next drain: intents still queued, and the effects and outputs of intents already
+    /// reduced, whose state changes stand. The effects and outputs of the intent whose reducer panicked go with it.
     fn drain(&self) {
         let _draining = Draining::start(&self.draining);
-        let intents = self.intents();
         loop {
             let mut any = false;
             loop {
@@ -172,23 +302,37 @@ impl<F: Feature> Inner<F> {
                 let Some(intent) = next else {
                     break;
                 };
-                let mut effects = Effects(Vec::new());
+                let mut effects = Effects::detached();
                 F::reduce(&mut self.state.borrow_mut(), intent, &mut effects);
-                self.effects.borrow_mut().extend(effects.0);
+                self.effects.borrow_mut().extend(effects.effects);
+                self.outputs.borrow_mut().extend(effects.outputs);
                 any = true;
             }
-            if !any && self.effects.borrow().is_empty() {
+            if !any && self.effects.borrow().is_empty() && self.outputs.borrow().is_empty() {
                 return;
             }
-            let mut host = self.host.borrow_mut();
-            host.render(&self.state.borrow(), &intents);
-            loop {
-                // The effects' borrow ends before the host runs.
-                let next = self.effects.borrow_mut().pop_front();
-                let Some(effect) = next else {
-                    break;
-                };
-                host.perform(effect, &intents);
+            {
+                let mut host = self.host.borrow_mut();
+                host.render(&self.state.borrow(), &self.intents);
+                self.perform_effects(&mut **host);
+            }
+            self.tell_listeners();
+        }
+    }
+
+    /// A listener can run another store, which can forward from this one, so no borrow is held while one runs. An intent it sends
+    /// back here waits for the next batch. If a listener panics, the listeners after it miss that one output.
+    fn tell_listeners(&self) {
+        loop {
+            let next = self.outputs.borrow_mut().pop_front();
+            let Some(output) = next else {
+                break;
+            };
+            let listeners = self.listeners.borrow().clone();
+            for listener in &listeners {
+                if !listener(&output) {
+                    self.listeners.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, listener));
+                }
             }
         }
     }
@@ -207,15 +351,6 @@ impl<'a> Draining<'a> {
 impl Drop for Draining<'_> {
     fn drop(&mut self) {
         self.0.set(false);
-    }
-}
-
-impl<F: Feature> Sink<F::Intent> for Inner<F> {
-    fn send(&self, intent: F::Intent) {
-        self.queue.borrow_mut().push_back(intent);
-        if !self.draining.get() {
-            self.drain();
-        }
     }
 }
 
@@ -239,6 +374,7 @@ mod tests {
         type State = i32;
         type Intent = Intent;
         type Effect = Effect;
+        type Output = Never;
 
         fn reduce(state: &mut i32, intent: Intent, effects: &mut Effects<Effect>) {
             match intent {
@@ -319,6 +455,7 @@ mod tests {
             type State = i32;
             type Intent = bool;
             type Effect = ();
+            type Output = Never;
             fn reduce(state: &mut i32, panic_now: bool, _: &mut Effects<()>) {
                 assert!(!panic_now);
                 *state += 1;
@@ -395,6 +532,7 @@ mod tests {
             type State = i32;
             type Intent = Option<i32>;
             type Effect = i32;
+            type Output = Never;
             fn reduce(state: &mut i32, intent: Option<i32>, effects: &mut Effects<i32>) {
                 effects.push(-1);
                 let by = intent.expect("this intent panics");
@@ -449,6 +587,7 @@ mod tests {
             type State = Option<i32>;
             type Intent = ParentIntent;
             type Effect = ParentEffect;
+            type Output = Never;
             fn reduce(state: &mut Option<i32>, intent: ParentIntent, effects: &mut Effects<ParentEffect>) {
                 match (intent, state.as_mut()) {
                     (ParentIntent::Child(intent), Some(child)) => effects.scoped(ParentEffect::Child, |effects| Counter::reduce(child, intent, effects)),
@@ -458,13 +597,285 @@ mod tests {
             }
         }
         let mut state = Some(1);
-        assert_eq!(step::<Parent>(&mut state, ParentIntent::Child(Intent::AddLater(2))), [ParentEffect::Child(Effect::Echo(2))]);
-        assert!(step::<Parent>(&mut state, ParentIntent::Child(Intent::Add(2))).is_empty());
+        assert_eq!(
+            step::<Parent>(&mut state, ParentIntent::Child(Intent::AddLater(2))).effects,
+            [ParentEffect::Child(Effect::Echo(2))]
+        );
+        assert!(step::<Parent>(&mut state, ParentIntent::Child(Intent::Add(2))).effects.is_empty());
         assert_eq!(state, Some(3));
-        assert!(step::<Parent>(&mut state, ParentIntent::Close).is_empty());
+        assert!(step::<Parent>(&mut state, ParentIntent::Close).effects.is_empty());
         assert!(
-            step::<Parent>(&mut state, ParentIntent::Child(Intent::AddLater(2))).is_empty(),
+            step::<Parent>(&mut state, ParentIntent::Child(Intent::AddLater(2))).effects.is_empty(),
             "a closed scope takes no intents"
         );
+    }
+
+    /// Emits what it is told to. Its host logs each render and effect, so a test can read the order across stores.
+    struct Talker;
+
+    #[derive(Debug, PartialEq)]
+    struct Said(&'static str);
+
+    enum TalkerIntent {
+        Say(&'static str),
+        SayAndWork(&'static str),
+        Heard,
+        Explode(&'static str),
+    }
+
+    impl Feature for Talker {
+        type State = ();
+        type Intent = TalkerIntent;
+        type Effect = &'static str;
+        type Output = Said;
+
+        fn reduce(_: &mut (), intent: TalkerIntent, effects: &mut Effects<&'static str, Said>) {
+            match intent {
+                TalkerIntent::Say(words) => effects.emit(Said(words)),
+                TalkerIntent::SayAndWork(words) => {
+                    effects.emit(Said(words));
+                    effects.push(words);
+                }
+                TalkerIntent::Heard => {}
+                TalkerIntent::Explode(words) => {
+                    effects.emit(Said(words));
+                    panic!("a fault in the reducer, expected by this test");
+                }
+            }
+        }
+    }
+
+    type Events = Rc<RefCell<Vec<String>>>;
+
+    struct TalkerHost(&'static str, Events);
+
+    impl Host<Talker> for TalkerHost {
+        fn render(&mut self, _: &(), _: &Intents<TalkerIntent>) {
+            self.1.borrow_mut().push(format!("{} render", self.0));
+        }
+
+        fn perform(&mut self, effect: &'static str, _: &Intents<TalkerIntent>) {
+            self.1.borrow_mut().push(format!("{} perform {effect}", self.0));
+        }
+    }
+
+    fn talker(name: &'static str, events: &Events) -> Store<Talker> {
+        Store::new((), TalkerHost(name, Rc::clone(events)))
+    }
+
+    #[test]
+    fn step_returns_what_the_reducer_emitted() {
+        let step = step::<Talker>(&mut (), TalkerIntent::SayAndWork("hello"));
+        assert_eq!(step.effects, ["hello"]);
+        assert_eq!(step.outputs, [Said("hello")]);
+    }
+
+    #[test]
+    fn an_output_goes_out_after_the_render_and_the_effects_of_its_batch() {
+        let events = Events::default();
+        let (from, to) = (talker("from", &events), talker("to", &events));
+        from.forward(&to.intents(), |_| TalkerIntent::Heard);
+        events.borrow_mut().clear();
+        from.send(TalkerIntent::SayAndWork("hello"));
+        assert_eq!(*events.borrow(), ["from render", "from perform hello", "to render"]);
+    }
+
+    #[test]
+    fn each_listener_hears_each_output_and_map_can_ignore_one() {
+        let events = Events::default();
+        let (from, first, second) = (talker("from", &events), talker("first", &events), talker("second", &events));
+        from.forward(&first.intents(), |_| TalkerIntent::Heard);
+        from.forward(&second.intents(), |Said(words)| (*words == "for all").then_some(TalkerIntent::Heard));
+        events.borrow_mut().clear();
+        from.send(TalkerIntent::Say("for one"));
+        from.send(TalkerIntent::Say("for all"));
+        assert_eq!(*events.borrow(), ["from render", "first render", "from render", "first render", "second render"]);
+    }
+
+    #[test]
+    fn stores_can_forward_to_each_other_without_a_second_borrow() {
+        let events = Events::default();
+        let (a, b) = (talker("a", &events), talker("b", &events));
+        a.forward(&b.intents(), |Said(words)| TalkerIntent::Say(words));
+        // `b` answers only this word, or the two would go back and forth forever.
+        b.forward(&a.intents(), |Said(words)| (*words == "ping").then_some(TalkerIntent::Heard));
+        events.borrow_mut().clear();
+        a.send(TalkerIntent::Say("ping"));
+        assert_eq!(*events.borrow(), ["a render", "b render", "a render"], "the answer waits for a's next batch");
+    }
+
+    #[test]
+    fn a_listener_can_forward_from_the_store_that_is_telling_it() {
+        let events = Events::default();
+        let (from, to) = (talker("from", &events), talker("to", &events));
+        let added = Rc::new(Cell::new(false));
+        let (adding, source, target) = (Rc::clone(&added), from.clone(), to.intents());
+        from.forward(&to.intents(), move |_| {
+            if !adding.replace(true) {
+                source.forward(&target, |_| TalkerIntent::Heard);
+            }
+            None
+        });
+        from.send(TalkerIntent::Say("first"));
+        assert!(added.get());
+        events.borrow_mut().clear();
+        from.send(TalkerIntent::Say("second"));
+        assert_eq!(*events.borrow(), ["from render", "to render"], "the listener it added hears the next output");
+        // The first listener holds a clone of `from`: let go of it, or the two keep each other alive.
+        from.0.listeners.borrow_mut().clear();
+    }
+
+    #[test]
+    fn a_forward_ends_with_the_store_it_sends_to() {
+        let events = Events::default();
+        let (from, to) = (talker("from", &events), talker("to", &events));
+        let held = Rc::new(());
+        let holding = Rc::clone(&held);
+        from.forward(&to.intents(), move |_| {
+            let _ = &holding;
+            TalkerIntent::Heard
+        });
+        drop(to);
+        events.borrow_mut().clear();
+        from.send(TalkerIntent::Say("hello"));
+        assert_eq!(*events.borrow(), ["from render"], "nothing reaches a store that is gone");
+        assert_eq!(Rc::strong_count(&held), 1, "and the forward lets go of what it holds");
+    }
+
+    #[test]
+    fn outputs_of_a_panicking_intent_go_with_it() {
+        let events = Events::default();
+        let (from, to) = (talker("from", &events), talker("to", &events));
+        from.forward(&to.intents(), |_| TalkerIntent::Heard);
+        events.borrow_mut().clear();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| from.send(TalkerIntent::Explode("lost"))));
+        assert!(panicked.is_err());
+        assert!(events.borrow().is_empty());
+        from.send(TalkerIntent::Say("after"));
+        assert_eq!(*events.borrow(), ["from render", "to render"], "only the later output goes out, and the store goes on");
+    }
+
+    /// Asks for two effects as it starts: one a host finishes at once, and one it only logs.
+    struct Starter;
+
+    impl Feature for Starter {
+        type State = i32;
+        type Intent = i32;
+        type Effect = i32;
+        type Output = Never;
+
+        fn reduce(state: &mut i32, by: i32, _: &mut Effects<i32>) {
+            *state += by;
+        }
+
+        fn start(state: &mut i32, effects: &mut Effects<i32>) {
+            *state = 10;
+            effects.push(1);
+            effects.push(2);
+        }
+    }
+
+    struct StarterHost(Events);
+
+    impl Host<Starter> for StarterHost {
+        fn render(&mut self, state: &i32, _: &Intents<i32>) {
+            self.0.borrow_mut().push(format!("render {state}"));
+        }
+
+        fn perform(&mut self, effect: i32, intents: &Intents<i32>) {
+            self.0.borrow_mut().push(format!("perform {effect}"));
+            if effect == 1 {
+                intents.send(5);
+            }
+        }
+    }
+
+    #[test]
+    fn start_changes_the_first_state_and_its_effects_follow_one_render() {
+        let events = Events::default();
+        let _store = Store::new(0, StarterHost(Rc::clone(&events)));
+        assert_eq!(*events.borrow(), ["render 10", "perform 1", "perform 2", "render 15"]);
+    }
+
+    #[test]
+    fn start_is_tested_with_no_host() {
+        let mut state = 0;
+        assert_eq!(start::<Starter>(&mut state), [1, 2]);
+        assert_eq!(state, 10);
+        assert!(start::<Counter>(&mut state).is_empty(), "a feature that doesn't say otherwise asks for nothing");
+    }
+
+    /// A parent whose store runs a child's feature, and whose host runs the child's host.
+    struct Nesting;
+
+    enum NestingIntent {
+        Child(Intent),
+    }
+
+    impl Feature for Nesting {
+        type State = i32;
+        type Intent = NestingIntent;
+        type Effect = Effect;
+        type Output = Never;
+
+        fn reduce(state: &mut i32, NestingIntent::Child(intent): NestingIntent, effects: &mut Effects<Effect>) {
+            Counter::reduce(state, intent, effects);
+        }
+    }
+
+    struct NestingHost(Recording);
+
+    impl Host<Nesting> for NestingHost {
+        fn render(&mut self, state: &i32, intents: &Intents<NestingIntent>) {
+            self.0.render(state, &intents.map(NestingIntent::Child));
+        }
+
+        fn perform(&mut self, effect: Effect, intents: &Intents<NestingIntent>) {
+            self.0.perform(effect, &intents.map(NestingIntent::Child));
+        }
+    }
+
+    #[test]
+    fn a_child_host_runs_inside_its_parents_store_through_a_mapped_sender() {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let store = Store::new(0, NestingHost(Recording(log.clone())));
+        log.borrow_mut().send_from_render = Some(1);
+        store.send(NestingIntent::Child(Intent::AddLater(2)));
+        assert_eq!(
+            log.borrow().renders,
+            [0, 0, 3],
+            "what the child sends from render and perform reaches the parent's store, as one batch"
+        );
+    }
+
+    #[test]
+    fn a_mapped_sender_ends_with_its_store_and_a_map_can_be_mapped() {
+        let (store, log) = store();
+        let child: Intents<i32> = store.intents().map(Intent::Add);
+        let grandchild: Intents<&str> = child.map(|words: &str| words.len() as i32);
+        grandchild.send("four");
+        assert_eq!(log.borrow().renders, [0, 4]);
+        drop(store);
+        grandchild.send("gone");
+        child.send(1);
+        assert_eq!(log.borrow().renders, [0, 4], "dropping the store ends every mapped sender");
+    }
+
+    #[test]
+    fn a_forward_through_a_mapped_sender_ends_with_the_store_it_reaches() {
+        let events = Events::default();
+        let from = talker("from", &events);
+        let (to, log) = store();
+        let held = Rc::new(());
+        let holding = Rc::clone(&held);
+        from.forward(&to.intents().map(Intent::Add), move |Said(words)| {
+            let _ = &holding;
+            words.len() as i32
+        });
+        from.send(TalkerIntent::Say("four"));
+        assert_eq!(log.borrow().renders, [0, 4]);
+        drop(to);
+        from.send(TalkerIntent::Say("gone"));
+        assert_eq!(Rc::strong_count(&held), 1, "the forward ended with the store behind the mapped sender");
     }
 }

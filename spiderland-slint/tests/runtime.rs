@@ -1,6 +1,6 @@
 //! Background work and timers against a real Slint event-loop proxy. One test: Slint's platform is set once per process.
 
-use spiderland::{Effects, Feature, Host, Intents, Panicked, Store, Subscriptions};
+use spiderland::{Effects, Feature, Host, Intents, Never, Panicked, Store, Subscriptions};
 use spiderland_slint::testing::{Headless, advance, settle, until};
 use spiderland_slint::{Background, Dropping, Listening, after, every, on_wake, on_watch};
 use std::cell::{Cell, RefCell};
@@ -35,6 +35,7 @@ impl Feature for Probe {
     type State = State;
     type Intent = Intent;
     type Effect = Effect;
+    type Output = Never;
 
     fn reduce(state: &mut State, intent: Intent, effects: &mut Effects<Effect>) {
         match intent {
@@ -196,6 +197,21 @@ fn work_and_timers_come_back_as_intents_on_the_ui_thread() {
     settle();
     assert_eq!(heard.get(), 1, "nothing is heard after the guard is gone");
     assert!(guard.borrow().is_none());
+
+    // A value published before anyone listened is heard only if the receiver is marked as changed.
+    let ticks = seen.borrow().ticks;
+    let (_publisher, updates) = watch::channel(1);
+    let listening = on_watch(updates, &store.intents(), || Intent::Tick);
+    settle();
+    assert_eq!(seen.borrow().ticks, ticks, "nothing new was published");
+    drop(listening);
+    let (_publisher, mut updates) = watch::channel(1);
+    updates.mark_changed();
+    let listening = on_watch(updates, &store.intents(), || Intent::Tick);
+    until("the value already published", || seen.borrow().ticks > ticks);
+    settle();
+    assert_eq!(seen.borrow().ticks, ticks + 1, "heard once");
+    drop(listening);
 
     // A delayed intent fires once, and the timer that replaces it takes its place.
     let ticks = seen.borrow().ticks;

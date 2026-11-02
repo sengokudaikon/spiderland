@@ -14,7 +14,7 @@ effects. A `Store` runs the two on the UI thread.
 ## Example
 
 ```rust
-use spiderland::{Effects, Feature};
+use spiderland::{Effects, Feature, Never};
 
 struct Counter;
 
@@ -36,6 +36,7 @@ impl Feature for Counter {
     type State = State;
     type Intent = Intent;
     type Effect = Effect;
+    type Output = Never;
 
     fn reduce(state: &mut State, intent: Intent, effects: &mut Effects<Effect>) {
         match intent {
@@ -48,8 +49,8 @@ impl Feature for Counter {
 // Rules are tested with no window.
 let mut state = State::default();
 spiderland::step::<Counter>(&mut state, Intent::Add(2));
-let effects = spiderland::step::<Counter>(&mut state, Intent::Save);
-assert!(matches!(effects[..], [Effect::Write(2)]));
+let step = spiderland::step::<Counter>(&mut state, Intent::Save);
+assert!(matches!(step.effects[..], [Effect::Write(2)]));
 ```
 
 The `spiderland` crate docs add a `Host` and a `Store` to this.

@@ -72,6 +72,8 @@ impl Listening {
 
 /// Sends `make()` on the UI thread each time a worker publishes on `updates`, and once more when it ends, so a feature can
 /// tell. Stops when the returned guard is dropped.
+///
+/// It hears what is published from now on. To hear a value already published too, call `mark_changed` on `updates` first.
 pub fn on_watch<T, I>(mut updates: watch::Receiver<T>, intents: &Intents<I>, make: impl Fn() -> I + 'static) -> Listening
 where
     T: 'static,
