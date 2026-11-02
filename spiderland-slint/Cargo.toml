@@ -4,6 +4,7 @@ description = "Runs spiderland features under Slint: background work, timers and
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [features]
 # `testing`: the real window with no display, for tests that drive it by real input.

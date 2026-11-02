@@ -4,6 +4,7 @@ description = "The build side of spiderland-phrases: bundles translations into a
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 rspolib.workspace = true

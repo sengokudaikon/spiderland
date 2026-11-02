@@ -79,3 +79,13 @@ A feature crate takes `spiderland` and `spiderland-phrases` and stays free of Sl
 - Don't name a component's callback after a value some binding inside it uses: a callback `start` breaks `alignment: start`.
 - A phrase's English is a literal: the template is read from the sources, not from a build.
 - A Slint global can't be named `Text`: that is the element. Name a page's words `HomeText`.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+
+Slint has its own terms, and this license does not change them. An app that uses `spiderland-slint` must take Slint under one of
+its licenses: GPL-3.0-only, royalty-free, or commercial.
+
+Unless you state otherwise, any contribution you submit for inclusion in this work, as defined in the Apache-2.0 license, is
+dual licensed as above, with no additional terms or conditions.
