@@ -2,22 +2,37 @@
 //! render skips what depends only on untouched state.
 
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// How many times a [`Tracked`] value has been opened for writing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Names one state of a [`Tracked`] value. Versions come from one counter for the whole process, so a value put in another's
+/// place never takes on a version a render has seen. Only a clone shares one, until either is written to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Version(u64);
+
+impl Version {
+    fn next() -> Self {
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        Version(LAST.fetch_add(1, Ordering::Relaxed) + 1)
+    }
+}
 
 /// A value whose version moves whenever it could have changed. Any `&mut` access counts, so a reducer can't change it and
 /// forget to say so. Access that changes nothing still counts: at worst that redoes a render, and it never misses one.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Tracked<T> {
     value: T,
     version: Version,
 }
 
+impl<T: Default> Default for Tracked<T> {
+    fn default() -> Self {
+        Tracked::new(T::default())
+    }
+}
+
 impl<T> Tracked<T> {
     pub fn new(value: T) -> Self {
-        Tracked { value, version: Version(0) }
+        Tracked { value, version: Version::next() }
     }
 
     pub fn version(&self) -> Version {
@@ -44,7 +59,7 @@ impl<T> Deref for Tracked<T> {
 
 impl<T> DerefMut for Tracked<T> {
     fn deref_mut(&mut self) -> &mut T {
-        self.version.0 += 1;
+        self.version = Version::next();
         &mut self.value
     }
 }
@@ -153,6 +168,27 @@ mod tests {
         assert_eq!(value.version(), start);
         *value = 2;
         assert_ne!(value.version(), start);
+    }
+
+    #[test]
+    fn a_value_put_in_anothers_place_has_a_version_of_its_own() {
+        let mut value = Tracked::new(1);
+        let mut slice = Slice::default();
+        let mut shown = 0;
+        slice.update(value.version(), || shown = *value);
+        value = Tracked::new(2);
+        slice.update(value.version(), || shown = *value);
+        assert_eq!(shown, 2);
+        assert_ne!(Tracked::<i32>::default().version(), Tracked::<i32>::default().version());
+    }
+
+    #[test]
+    fn a_clone_shares_its_version_until_either_is_written_to() {
+        let value = Tracked::new(1);
+        let mut clone = value.clone();
+        assert_eq!(clone.version(), value.version());
+        *clone = 2;
+        assert_ne!(clone.version(), value.version());
     }
 
     #[test]
