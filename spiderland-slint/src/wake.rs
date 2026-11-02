@@ -19,7 +19,7 @@ impl Waker {
     }
 }
 
-/// Drops the work given to [`local`] when dropped, if it hasn't finished.
+/// Drops the work given to [`Background::local`](crate::Background::local) when dropped, if it hasn't finished.
 pub struct Dropping(oneshot::Sender<()>);
 
 impl Dropping {
@@ -28,10 +28,8 @@ impl Dropping {
     }
 }
 
-/// Waits for `work` on the UI thread, then hands its result to `then`. Dropping the returned guard drops the work instead.
-/// Unlike aborting a task, that is safe at any moment, including from inside `then`: a store's reducer runs there, and what it
-/// asks for may be to let go of this very work.
-pub fn local<T: 'static>(work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) -> Dropping {
+/// Waits for `work` on the UI thread, then hands its result to `then`. Dropping the returned guard drops the work and `then`.
+pub(crate) fn droppable<T: 'static>(work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) -> Dropping {
     let (guard, mut dropped) = oneshot::channel::<()>();
     // Fails only where no event loop can ever run, and then nothing could show the result anyway.
     let _ = slint::spawn_local(async move {
@@ -53,13 +51,6 @@ pub fn local<T: 'static>(work: impl Future<Output = T> + 'static, then: impl FnO
     Dropping(guard)
 }
 
-/// Waits for `work` on the UI thread and hands its result to `then`, whatever else happens. Nothing can stop it, so it suits
-/// a result that must always be heard, such as whether a write went through. Work that may be let go of goes through [`local`].
-pub fn finish<T: 'static>(work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) {
-    // Fails only where no event loop can ever run, and then nothing could show the result anyway.
-    let _ = slint::spawn_local(async move { then(work.await) });
-}
-
 /// Stops listening when dropped, so it can be a guard for [`spiderland::Subscriptions`]. That is safe from inside the intent
 /// the listener itself sent: nothing is sent after that, and what the listener holds is let go of on the next turn of the
 /// event loop, with no need for anything further to be published.
@@ -72,7 +63,8 @@ impl Listening {
     fn start<F: Future<Output = ()> + 'static>(body: impl FnOnce(Weak<()>) -> F) -> Listening {
         let wanted = Rc::new(());
         Listening {
-            _work: local(body(Rc::downgrade(&wanted)), |()| {}),
+            // Not counted as a Background's work: a listener has no end for a test to wait for.
+            _work: droppable(body(Rc::downgrade(&wanted)), |()| {}),
             _wanted: wanted,
         }
     }
