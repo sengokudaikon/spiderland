@@ -51,4 +51,11 @@ tag makes a GitHub release from that version's section.
 - **Breaking:** `Feature` requires `type Subscription`. On a nightly compiler, turn on `spiderland`'s `nightly` feature and change
   nothing else. On stable, a feature that wants no subscriptions adds `type Subscription = Never;`.
 
+### Fixed
+
+- `spiderland-phrases-build`: `Template` reads Rust sources as Rust's tokens. It used to stop reading a file at its first
+  `#[cfg(test)]` line, so a `#[cfg(test)] mod x;` near the top hid every phrase below it from translators. It now leaves out only
+  the item under that attribute. A comment or a string that mentions `Phrase::new` no longer counts, and escapes such as `\x41`
+  read as Rust reads them. A template that lost phrases gains them back: run the task that writes it.
+
 [Unreleased]: https://github.com/sengokudaikon/spiderland/commits/main

@@ -1,11 +1,13 @@
 //! Every word an app shows, in one gettext template for translators. Two sources, one msgid space: each entry of a
-//! `phrases!` block and each `Phrase::new("…")`, `Phrase::ctx("…", "…")` and `Plural::new("…", "…")` in the Rust sources (up
-//! to a file's `#[cfg(test)]`), and each `@tr` in the views, read by `slint-tr-extractor`; a context (`"ctx" => …`,
-//! `Phrase::ctx`, `@tr("ctx" => …)`) is the entry's msgctxt. References name files only, so moving code does not make the
-//! template stale; the header carries no date, so a check compares as written.
+//! `phrases!` block and each `Phrase::new("…")`, `Phrase::ctx("…", "…")` and `Plural::new("…", "…")` in the Rust sources, and
+//! each `@tr` in the views, read by `slint-tr-extractor`; a context (`"ctx" => …`, `Phrase::ctx`, `@tr("ctx" => …)`) is the
+//! entry's msgctxt. The Rust sources are read as Rust's tokens, leaving out what is only built for tests. References name files
+//! only, so moving code does not make the template stale; the header carries no date, so a check compares as written.
 
+use proc_macro2::{Delimiter, Group, Spacing, TokenStream, TokenTree};
 use std::collections::BTreeMap;
 use std::fs;
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -95,18 +97,7 @@ fn generate(template: &Template) -> Result<(String, usize), String> {
         if text.contains(MACRO_DEFINITION) {
             continue;
         }
-        // Comments only talk about phrases, and a file's tests (`#[cfg(test)]`, `#[cfg(all(test, …))]`) show the user nothing.
-        let text: String = text
-            .lines()
-            .take_while(|line| !["#[cfg(test)]", "#[cfg(all(test,"].iter().any(|start| line.trim_start().starts_with(start)))
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join(
-                "
-",
-            );
-        let text = text.as_str();
-        for found in rust_phrases(text).map_err(|e| format!("{file}: {e}"))? {
+        for found in rust_phrases(&text).map_err(|e| format!("{file}: {e}"))? {
             add(found, file.clone());
         }
     }
@@ -169,135 +160,253 @@ fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-/// Each entry of a `phrases!` block and each `Phrase::new("…")`, `Phrase::ctx("…", "…")` and `Plural::new("…", "…")`:
-/// plain or raw string literals, as the crate's docs ask.
+/// Each entry of a `phrases!` block and each `Phrase::new("…")`, `Phrase::ctx("…", "…")` and `Plural::new("…", "…")`, read from
+/// Rust's tokens, so a comment or a string that mentions one isn't one. An item under `#[cfg(test)]` or `#[cfg(all(test, …))]`
+/// shows the user nothing, so it is left out with all it holds.
 fn rust_phrases(text: &str) -> Result<Vec<Found>, String> {
-    const BLOCK: &str = "phrases!";
-    const CALLS: [&str; 4] = [BLOCK, "Phrase::new(", "Phrase::ctx(", "Plural::new("];
+    // Rust reads a line break inside a literal as `\n`, whatever the file's line endings.
+    let tokens: TokenStream = text.replace("\r\n", "\n").parse().map_err(|error| format!("can't be read as Rust: {error}"))?;
     let mut found = Vec::new();
-    let mut rest = text;
-    while let Some((at, call)) = CALLS.iter().filter_map(|call| rest.find(call).map(|at| (at, *call))).min() {
-        rest = &rest[at + call.len()..];
-        if call == BLOCK {
-            rest = block_phrases(rest, &mut found)?;
-            continue;
-        }
-        let mut literal = |first: bool| {
-            if !first {
-                rest = rest.trim_start().strip_prefix(',').ok_or_else(|| format!("{call} takes two string literals"))?;
-            }
-            let (text, after) = rust_literal(rest.trim_start()).ok_or_else(|| format!("{call} without a string literal near {:?}", &rest[..rest.len().min(40)]))?;
-            rest = after;
-            Ok::<_, String>(text)
-        };
-        let first = literal(true)?;
-        found.push(match call {
-            "Phrase::new(" => Found {
-                context: None,
-                msgid: first,
-                plural: None,
-            },
-            "Phrase::ctx(" => Found {
-                context: Some(first),
-                msgid: literal(false)?,
-                plural: None,
-            },
-            _ => Found {
-                context: None,
-                msgid: first,
-                plural: Some(literal(false)?),
-            },
-        });
-    }
+    scan(tokens, &mut found)?;
     Ok(found)
 }
 
-/// The entries of a `phrases!` block, `text` starting after the macro's name, and what follows the block. Entry by
-/// entry rather than to the closing brace, since the English holds braces of its own.
-fn block_phrases<'a>(text: &'a str, found: &mut Vec<Found>) -> Result<&'a str, String> {
-    let near = |text: &str| format!("phrases! near {:?}", text.chars().take(40).collect::<String>());
-    let mut rest = text.trim_start().strip_prefix('{').ok_or_else(|| near(text))?;
-    loop {
-        rest = rest.trim_start();
-        if let Some(after) = rest.strip_prefix('}') {
-            return Ok(after);
-        }
-        if let Some(attribute) = rest.strip_prefix("#[") {
-            let close = attribute.find(']').ok_or_else(|| near(rest))?;
-            rest = &attribute[close + 1..];
-            continue;
-        }
-        if rest.starts_with("//") {
-            rest = rest.split_once('\n').map_or("", |(_, after)| after);
-            continue;
-        }
-        // The visibility and name, which the macro has already checked.
-        let (declared, after) = rest.split_once(':').filter(|(declared, _)| !declared.contains(['"', '{', '}'])).ok_or_else(|| near(rest))?;
-        let name = declared.trim();
-        let (first, after) = rust_literal(after.trim_start()).ok_or_else(|| near(name))?;
-        rest = after.trim_start();
-        let mut second = |operator: &str| -> Result<Option<String>, String> {
-            let Some(after) = rest.strip_prefix(operator) else {
-                return Ok(None);
+fn scan(tokens: TokenStream, found: &mut Vec<Found>) -> Result<(), String> {
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut at = 0;
+    while let Some(token) = tokens.get(at) {
+        if let Some(attribute) = attribute(&tokens, at) {
+            at = match attribute {
+                Attribute { tests_only: false, end, .. } => end,
+                // `#![cfg(test)]`: all that holds it is for tests.
+                Attribute { inner: true, .. } => return Ok(()),
+                Attribute { end, .. } => past_item(&tokens, end),
             };
-            let (second, after) = rust_literal(after.trim_start()).ok_or_else(|| near(name))?;
-            rest = after;
-            Ok(Some(second))
+            continue;
+        }
+        match token {
+            // A `!` joined to what follows is `!=`: `phrases != …` compares a value of that name.
+            TokenTree::Ident(name)
+                if name == "phrases" && matches!(tokens.get(at + 1), Some(TokenTree::Punct(bang)) if bang.as_char() == '!' && bang.spacing() == Spacing::Alone) =>
+            {
+                let Some(TokenTree::Group(block)) = tokens
+                    .get(at + 2)
+                    .filter(|token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace))
+                else {
+                    return Err(format!("phrases! takes its entries in braces, near {}", near(&tokens, at)));
+                };
+                block_phrases(block.stream(), found)?;
+                at += 3;
+            }
+            _ if let Some((call, arguments)) = call(&tokens, at) => {
+                found.push(call_phrase(call, arguments)?);
+                at += 5;
+            }
+            TokenTree::Group(group) => {
+                scan(group.stream(), found)?;
+                at += 1;
+            }
+            _ => at += 1,
+        }
+    }
+    Ok(())
+}
+
+/// An attribute, `#[…]` or `#![…]`.
+struct Attribute {
+    /// Where the tokens after it start.
+    end: usize,
+    /// `#![…]`, which is on what holds it rather than on what follows.
+    inner: bool,
+    /// What it is on is only built for tests.
+    tests_only: bool,
+}
+
+fn attribute(tokens: &[TokenTree], at: usize) -> Option<Attribute> {
+    if !is_punct(tokens.get(at)?, '#') {
+        return None;
+    }
+    let inner = tokens.get(at + 1).is_some_and(|token| is_punct(token, '!'));
+    let body = at + 1 + usize::from(inner);
+    let TokenTree::Group(group) = tokens.get(body)? else {
+        return None;
+    };
+    (group.delimiter() == Delimiter::Bracket).then(|| Attribute {
+        end: body + 1,
+        inner,
+        tests_only: only_in_tests(group.stream()),
+    })
+}
+
+/// `cfg(test)`, or `cfg(all(…))` with `test` among what it needs.
+fn only_in_tests(attribute: TokenStream) -> bool {
+    let tokens: Vec<TokenTree> = attribute.into_iter().collect();
+    let [TokenTree::Ident(cfg), TokenTree::Group(condition)] = &tokens[..] else {
+        return false;
+    };
+    let condition: Vec<TokenTree> = condition.stream().into_iter().collect();
+    cfg == "cfg"
+        && match &condition[..] {
+            [TokenTree::Ident(test)] => test == "test",
+            [TokenTree::Ident(all), TokenTree::Group(needs)] if all == "all" => needs.stream().into_iter().any(|token| matches!(&token, TokenTree::Ident(test) if test == "test")),
+            _ => false,
+        }
+}
+
+/// Where the item starting at `at` ends: after its first `;` or `{…}`, or after a `,` that ends a field or an arm. A `,` between
+/// angle brackets, as in `<A, B>`, doesn't end it.
+fn past_item(tokens: &[TokenTree], mut at: usize) -> usize {
+    let mut angles = 0usize;
+    while let Some(token) = tokens.get(at) {
+        let arrow = at > 0 && matches!(&tokens[at - 1], TokenTree::Punct(before) if matches!(before.as_char(), '-' | '=') && before.spacing() == Spacing::Joint);
+        at += 1;
+        match token {
+            TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => return at,
+            TokenTree::Punct(punct) => match punct.as_char() {
+                ';' => return at,
+                ',' if angles == 0 => return at,
+                '<' => angles += 1,
+                '>' if !arrow => angles = angles.saturating_sub(1),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    at
+}
+
+/// `Phrase::new(…)`, `Phrase::ctx(…)` or `Plural::new(…)` at `at`, with its arguments.
+fn call(tokens: &[TokenTree], at: usize) -> Option<(&'static str, &Group)> {
+    let [
+        TokenTree::Ident(kind),
+        TokenTree::Punct(first),
+        TokenTree::Punct(second),
+        TokenTree::Ident(function),
+        TokenTree::Group(arguments),
+    ] = tokens.get(at..at + 5)?
+    else {
+        return None;
+    };
+    if first.as_char() != ':' || first.spacing() != Spacing::Joint || second.as_char() != ':' || arguments.delimiter() != Delimiter::Parenthesis {
+        return None;
+    }
+    let call = match (kind.to_string().as_str(), function.to_string().as_str()) {
+        ("Phrase", "new") => "Phrase::new",
+        ("Phrase", "ctx") => "Phrase::ctx",
+        ("Plural", "new") => "Plural::new",
+        _ => return None,
+    };
+    Some((call, arguments))
+}
+
+/// The phrase a call makes: its arguments are string literals, as the crate's docs ask.
+fn call_phrase(call: &str, arguments: &Group) -> Result<Found, String> {
+    let unreadable = || format!("{call}{arguments} doesn't take string literals alone");
+    let mut texts = Vec::new();
+    let mut tokens = arguments.stream().into_iter();
+    while let Some(token) = tokens.next() {
+        texts.push(literal(&token).ok_or_else(unreadable)?);
+        if tokens.next().is_some_and(|comma| !is_punct(&comma, ',')) {
+            return Err(unreadable());
+        }
+    }
+    Ok(match (call, &mut texts[..]) {
+        ("Phrase::new", [msgid]) => Found {
+            context: None,
+            msgid: mem::take(msgid),
+            plural: None,
+        },
+        ("Phrase::ctx", [context, msgid]) => Found {
+            context: Some(mem::take(context)),
+            msgid: mem::take(msgid),
+            plural: None,
+        },
+        ("Plural::new", [one, other]) => Found {
+            context: None,
+            msgid: mem::take(one),
+            plural: Some(mem::take(other)),
+        },
+        _ => return Err(unreadable()),
+    })
+}
+
+/// The entries of a `phrases!` block. An entry under `#[cfg(test)]` is left out.
+fn block_phrases(block: TokenStream, found: &mut Vec<Found>) -> Result<(), String> {
+    let tokens: Vec<TokenTree> = block.into_iter().collect();
+    let mut at = 0;
+    while at < tokens.len() {
+        let mut tests_only = false;
+        while let Some(attribute) = attribute(&tokens, at) {
+            tests_only |= attribute.tests_only;
+            at = attribute.end;
+        }
+        // The visibility, which the macro has already checked.
+        if matches!(tokens.get(at), Some(TokenTree::Ident(word)) if word == "pub") {
+            at += 1;
+            if matches!(tokens.get(at), Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis) {
+                at += 1;
+            }
+        }
+        let Some(TokenTree::Ident(name)) = tokens.get(at) else {
+            return Err(format!("phrases! has no name near {}", near(&tokens, at)));
         };
-        found.push(if let Some(msgid) = second("=>")? {
+        let unreadable = || format!("phrases! entry {name} isn't `Name: \"English\"`, `Name: \"context\" => \"English\"` or `Name: \"one\" | \"other\"`");
+        if !tokens.get(at + 1).is_some_and(|token| is_punct(token, ':')) {
+            return Err(unreadable());
+        }
+        let first = tokens.get(at + 2).and_then(literal).ok_or_else(unreadable)?;
+        at += 3;
+        let arrow = matches!(tokens.get(at), Some(TokenTree::Punct(equals)) if equals.as_char() == '=' && equals.spacing() == Spacing::Joint)
+            && tokens.get(at + 1).is_some_and(|token| is_punct(token, '>'));
+        let entry = if arrow {
+            let msgid = tokens.get(at + 2).and_then(literal).ok_or_else(unreadable)?;
+            at += 3;
             Found {
                 context: Some(first),
                 msgid,
                 plural: None,
             }
+        } else if tokens.get(at).is_some_and(|token| is_punct(token, '|')) {
+            let other = tokens.get(at + 1).and_then(literal).ok_or_else(unreadable)?;
+            at += 2;
+            Found {
+                context: None,
+                msgid: first,
+                plural: Some(other),
+            }
         } else {
             Found {
                 context: None,
                 msgid: first,
-                plural: second("|")?,
+                plural: None,
             }
-        });
+        };
+        if !tests_only {
+            found.push(entry);
+        }
+    }
+    Ok(())
+}
+
+/// A string literal's text, as Rust reads it.
+fn literal(token: &TokenTree) -> Option<String> {
+    let TokenTree::Literal(literal) = token else {
+        return None;
+    };
+    match syn::Lit::new(literal.clone()) {
+        syn::Lit::Str(text) => Some(text.value()),
+        _ => None,
     }
 }
 
-/// A Rust string literal at the start of `text`, unescaped, and what follows it.
-fn rust_literal(text: &str) -> Option<(String, &str)> {
-    if let Some(raw) = text.strip_prefix('r') {
-        let hashes = raw.len() - raw.trim_start_matches('#').len();
-        let body = raw[hashes..].strip_prefix('"')?;
-        let close = format!("\"{}", "#".repeat(hashes));
-        let end = body.find(&close)?;
-        return Some((body[..end].to_owned(), &body[end + close.len()..]));
-    }
-    let body = text.strip_prefix('"')?;
-    let mut out = String::new();
-    let mut chars = body.char_indices();
-    while let Some((at, c)) = chars.next() {
-        match c {
-            '"' => return Some((out, &body[at + 1..])),
-            '\\' => match chars.next()?.1 {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'r' => out.push('\r'),
-                '0' => out.push('\0'),
-                'u' => {
-                    let digits: String = chars.by_ref().map(|(_, c)| c).skip(1).take_while(|c| *c != '}').collect();
-                    out.push(char::from_u32(u32::from_str_radix(&digits, 16).ok()?)?);
-                }
-                // A line continuation: the break and the next line's indent are not part of the string.
-                '\n' | '\r' => {
-                    let tail = &body[at + 1..];
-                    let skipped = tail.len() - tail.trim_start().len();
-                    for _ in 0..tail[..skipped].chars().count() - 1 {
-                        chars.next();
-                    }
-                }
-                other => out.push(other),
-            },
-            c => out.push(c),
-        }
-    }
-    None
+fn is_punct(token: &TokenTree, char: char) -> bool {
+    matches!(token, TokenTree::Punct(punct) if punct.as_char() == char)
+}
+
+/// The tokens from `at`, for an error to say where it is.
+fn near(tokens: &[TokenTree], at: usize) -> String {
+    let near: Vec<String> = tokens.iter().skip(at).take(6).map(ToString::to_string).collect();
+    if near.is_empty() { "its end".to_owned() } else { format!("`{}`", near.join(" ")) }
 }
 
 /// The views' `@tr` strings, as `slint-tr-extractor` reads them, with each file they are in.
@@ -424,7 +533,62 @@ mod tests {
         assert_eq!(msgids("Phrase::new(\"one \\\n        two\")"), ["one two"]);
         assert_eq!(msgids(r###"Phrase::new(r#"raw "quoted""#)"###), ["raw \"quoted\""]);
         assert_eq!(msgids(r#"Phrase::new("T1\u{a0}only")"#), ["T1\u{a0}only"]);
+        assert_eq!(msgids(r#"Phrase::new("\x41\x7e")"#), ["A~"]);
+        assert_eq!(msgids("Phrase::new(\"two\r\nlines\")"), ["two\nlines"], "a CRLF checkout reads as Rust reads it");
         assert!(rust_phrases("Phrase::new(NAME)").is_err());
+        assert!(rust_phrases(r#"Phrase::new("a" "b")"#).is_err());
+    }
+
+    #[test]
+    fn what_is_built_only_for_tests_is_left_out_and_what_follows_it_is_read() {
+        let text = r##"
+            #[cfg(test)]
+            mod lib_tests;
+            const FIRST: Phrase = Phrase::new("After a test module's declaration");
+            #[cfg(test)]
+            #[allow(unused)]
+            fn helper<A, B>() -> Phrase { Phrase::new("In a test helper") }
+            #[cfg(all(windows, test))]
+            mod windows_tests { const A: Phrase = Phrase::new("In Windows' tests"); }
+            #[cfg(not(test))]
+            const SHOWN: Phrase = Phrase::new("Outside tests");
+            fn shown(case: u8) -> Phrase {
+                match case {
+                    #[cfg(test)]
+                    0 => Phrase::new("In a test arm"),
+                    _ => Phrase::new("In the next arm"),
+                }
+            }
+            phrases! {
+                #[cfg(test)]
+                ForATest: "In a test entry"
+                Kept: "Kept"
+            }
+            #[cfg(test)]
+            mod tests {
+                const A: Phrase = Phrase::new("In the tests");
+            }
+            const LAST: Phrase = Phrase::new("After the tests");
+        "##;
+        assert_eq!(
+            msgids(text),
+            ["After a test module's declaration", "Outside tests", "In the next arm", "Kept", "After the tests"]
+        );
+        assert!(msgids("#![cfg(test)]\nconst A: Phrase = Phrase::new(\"In a file of tests\");").is_empty());
+    }
+
+    #[test]
+    fn a_comment_or_a_string_that_mentions_a_phrase_is_not_one() {
+        let text = r##"
+            // Phrase::new("In a line comment")
+            /* Plural::new("In a block", "comment") */
+            /// Phrase::new("In a doc comment")
+            const A: &str = "Phrase::new(\"In a string\")";
+            const B: Phrase = Phrase::new("Real"); // phrases! { Trailing: "comment" }
+            const C: fn(&'static str) -> Phrase = Phrase::new;
+            fn some(phrases: usize) -> bool { phrases != 0 }
+        "##;
+        assert_eq!(msgids(text), ["Real"]);
     }
 
     #[test]

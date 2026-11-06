@@ -4085,7 +4085,9 @@ dependencies = [
 name = "spiderland-phrases-build"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
  "rspolib",
+ "syn 3.0.9",
  "tempfile",
 ]
 

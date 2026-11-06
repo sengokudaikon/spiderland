@@ -7,7 +7,9 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+proc-macro2.workspace = true
 rspolib.workspace = true
+syn.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
