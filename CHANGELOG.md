@@ -32,6 +32,8 @@ tag makes a GitHub release from that version's section.
   it on the same inputs, so none can be left out.
 - `spiderland`: `Store::observe` and `Seen`, which show each intent just before it is reduced and each effect just before it is
   performed. The observer gets a reference, so nothing is copied and nothing needs `Debug`.
+- `spiderland`: `Intents::send_all` and `Store::send_all`, which send several intents as one batch. All of them are reduced before
+  the render and the effects, so a snapshot and the answer that came with it are never shown or acted on apart.
 
 ### Changed
 

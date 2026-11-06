@@ -28,6 +28,8 @@ Put it in the crate with the window.
 - `callbacks!` maps view callbacks to intents, and does nothing else.
 - `render` runs each `Slice`, and syncs `Rows` and `Subscriptions`.
 - `perform` matches on the effect.
+- Work that comes back with two things, such as a fresh snapshot and its answer, sends them with `send_all`, so no render or effect
+  sees one without the other.
 
 ## 4. View
 

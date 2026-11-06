@@ -118,6 +118,7 @@ pub trait Host<F: Feature>: 'static {
 
 trait Sink<I> {
     fn send(&self, intent: I);
+    fn send_all(&self, intents: Vec<I>);
     fn is_alive(&self) -> bool;
 }
 
@@ -126,6 +127,12 @@ impl<F: Feature> Sink<F::Intent> for Weak<Inner<F>> {
     fn send(&self, intent: F::Intent) {
         if let Some(inner) = self.upgrade() {
             inner.accept(intent);
+        }
+    }
+
+    fn send_all(&self, intents: Vec<F::Intent>) {
+        if let Some(inner) = self.upgrade() {
+            inner.accept_all(intents);
         }
     }
 
@@ -143,6 +150,10 @@ struct Mapped<I, M> {
 impl<C, I, M: Fn(C) -> I> Sink<C> for Mapped<I, M> {
     fn send(&self, intent: C) {
         self.to.send((self.map)(intent));
+    }
+
+    fn send_all(&self, intents: Vec<C>) {
+        self.to.0.send_all(intents.into_iter().map(&self.map).collect());
     }
 
     fn is_alive(&self) -> bool {
@@ -163,6 +174,13 @@ impl<I> Clone for Intents<I> {
 impl<I> Intents<I> {
     pub fn send(&self, intent: I) {
         self.0.send(intent);
+    }
+
+    /// Sends `intents` as one batch: all of them are reduced, in order, before the render and the effects that follow. It suits
+    /// work that reports two things at once, such as a fresh snapshot and the answer that came with it: sent one by one, the
+    /// host would render and perform for a state with the snapshot and not yet the answer.
+    pub fn send_all(&self, intents: impl IntoIterator<Item = I>) {
+        self.0.send_all(intents.into_iter().collect());
     }
 
     /// A sender of another type, whose intents `map` turns into these. It suits a child's host inside its parent's store. Like this
@@ -236,6 +254,11 @@ impl<F: Feature> Store<F> {
     /// finished at once): then it runs next, after the current batch. State is never borrowed twice.
     pub fn send(&self, intent: F::Intent) {
         self.0.accept(intent);
+    }
+
+    /// Sends `intents` as one batch, as [`Intents::send_all`] does.
+    pub fn send_all(&self, intents: impl IntoIterator<Item = F::Intent>) {
+        self.0.accept_all(intents.into_iter().collect());
     }
 
     /// Sends `intent` and reads what it did, for a view callback that returns a value. None while the store is at work: the
@@ -359,6 +382,14 @@ impl<F: Feature> Store<F> {
 impl<F: Feature> Inner<F> {
     fn accept(&self, intent: F::Intent) {
         self.queue.borrow_mut().push_back(intent);
+        if !self.draining.get() {
+            self.drain();
+        }
+    }
+
+    /// Queued at once, so a drain already under way reduces them in one pass too.
+    fn accept_all(&self, intents: Vec<F::Intent>) {
+        self.queue.borrow_mut().extend(intents);
         if !self.draining.get() {
             self.drain();
         }
@@ -539,6 +570,24 @@ mod tests {
         let (store, log) = store();
         store.send(Intent::AddLater(7));
         assert_eq!(log.borrow().renders, [0, 0, 7]);
+    }
+
+    #[test]
+    fn intents_sent_as_one_batch_render_once_after_all_of_them() {
+        let (store, log) = store();
+        store.send_all([Intent::Add(1), Intent::Add(2)]);
+        store.intents().send_all([Intent::Add(3), Intent::Add(4)]);
+        store.intents().map(Intent::Add).send_all([5, 6]);
+        assert_eq!(log.borrow().renders, [0, 3, 10, 21], "no render shows a batch half done");
+    }
+
+    #[test]
+    fn a_batchs_effects_follow_its_one_render_and_what_they_send_is_the_next_batch() {
+        let (store, log) = store();
+        let seen = observed(&store);
+        store.send_all([Intent::AddLater(1), Intent::Add(10), Intent::AddLater(2)]);
+        assert_eq!(*seen.borrow(), ["add later 1", "add 10", "add later 2", "echo 1", "echo 2", "add 1", "add 2"]);
+        assert_eq!(log.borrow().renders, [0, 10, 13]);
     }
 
     #[test]

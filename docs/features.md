@@ -7,6 +7,7 @@
 | `Feature` | The pure half: `reduce(state, intent, effects)`. |
 | `Host` | The impure half: `render` the state, `perform` the effects. |
 | `Store` | Runs the two on the UI thread, and queues intents sent while it works. |
+| `Intents::send_all`, `Store::send_all` | Send several intents as one batch, so the render and the effects come after all of them. |
 | `Store::ask` | Sends an intent and reads what it did, for a view callback that returns a value. |
 | `Feature::Output`, `Effects::emit` | Let a reducer tell whoever listens. `Never` is for a feature that tells no one. |
 | `Store::forward` | Turns one store's outputs into another store's intents. |
