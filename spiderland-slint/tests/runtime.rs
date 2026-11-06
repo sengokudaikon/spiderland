@@ -1,8 +1,9 @@
 //! Background work and timers against a real Slint event-loop proxy. One test: Slint's platform is set once per process.
 
-use spiderland::{Dropping, Effects, Feature, Host, Intents, Listening, Never, Panicked, Store, Subscriptions};
+use spiderland::{Dropping, Effects, Feature, Host, Intents, Listening, Never, Panicked, Store};
 use spiderland_slint::testing::{Headless, advance, settle, until};
 use spiderland_slint::{Background, after, every, on_wake, on_watch};
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -22,6 +23,8 @@ enum Intent {
     Finished(Result<i32, Panicked>),
     Watch(bool),
     Tick,
+    Edit,
+    Settled(u32),
 }
 
 #[derive(Default)]
@@ -29,14 +32,28 @@ struct State {
     results: Vec<Result<i32, Panicked>>,
     watching: bool,
     ticks: i32,
+    edits: u32,
+    /// The edit count that last went quiet.
+    settled: u32,
+    settles: u32,
 }
+
+/// What runs while the state wants it.
+#[derive(PartialEq)]
+enum Running {
+    Ticking,
+    /// A debounce, keyed on the edit count: each edit drops the timer of the one before.
+    Settling(u32),
+}
+
+const QUIET: Duration = Duration::from_millis(300);
 
 impl Feature for Probe {
     type State = State;
     type Intent = Intent;
     type Effect = Effect;
     type Output = Never;
-    type Subscription = Never;
+    type Subscription = Running;
 
     fn reduce(state: &mut State, intent: Intent, effects: &mut Effects<Effect>) {
         match intent {
@@ -44,33 +61,53 @@ impl Feature for Probe {
             Intent::Finished(result) => state.results.push(result),
             Intent::Watch(on) => state.watching = on,
             Intent::Tick => state.ticks += 1,
+            Intent::Edit => state.edits += 1,
+            Intent::Settled(edits) => {
+                state.settled = edits;
+                state.settles += 1;
+            }
         }
+    }
+
+    fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
+        let ticking = state.watching.then_some(Running::Ticking);
+        let settling = (state.edits != state.settled).then_some(Running::Settling(state.edits));
+        ticking.into_iter().chain(settling)
     }
 }
 
+#[derive(Default)]
 struct Seen {
     results: Vec<Result<i32, Panicked>>,
     ticks: i32,
+    settled: u32,
+    settles: u32,
 }
 
 struct Runner {
     background: Background,
     seen: Rc<RefCell<Seen>>,
-    watch: Subscriptions<()>,
 }
 
 impl Host<Probe> for Runner {
-    fn render(&mut self, state: &State, intents: &Intents<Intent>) {
+    fn render(&mut self, state: &State, _: &Intents<Intent>) {
         let mut seen = self.seen.borrow_mut();
         seen.results.clone_from(&state.results);
         seen.ticks = state.ticks;
-        self.watch
-            .sync(state.watching.then_some(()), |()| every(Duration::from_millis(100), intents, || Intent::Tick));
+        seen.settled = state.settled;
+        seen.settles = state.settles;
     }
 
     fn perform(&mut self, effect: Effect, intents: &Intents<Intent>) {
         let Effect::Work(work) = effect;
         self.background.run(intents, work, Intent::Finished);
+    }
+
+    fn subscribe(&mut self, key: &Running, intents: &Intents<Intent>) -> Box<dyn Any> {
+        match *key {
+            Running::Ticking => Box::new(every(Duration::from_millis(100), intents, || Intent::Tick)),
+            Running::Settling(edits) => Box::new(after(QUIET, intents, move || Intent::Settled(edits))),
+        }
     }
 }
 
@@ -89,13 +126,12 @@ fn work_and_timers_come_back_as_intents_on_the_ui_thread() {
         });
         true
     });
-    let seen = Rc::new(RefCell::new(Seen { results: Vec::new(), ticks: 0 }));
+    let seen = Rc::new(RefCell::new(Seen::default()));
     let store = Store::new(
         State::default(),
         Runner {
             background: background.clone(),
             seen: seen.clone(),
-            watch: Subscriptions::default(),
         },
     );
 
@@ -145,6 +181,18 @@ fn work_and_timers_come_back_as_intents_on_the_ui_thread() {
     store.send(Intent::Watch(false));
     tick(1000);
     assert_eq!(seen.borrow().ticks, 2, "no tick once the state no longer wants the timer");
+
+    // A debounce is keyed on an edit count: each edit drops the timer of the one before, so only the last one fires, once. The
+    // store drops that timer from inside its own tick, as the state stops wanting it.
+    for _ in 0..3 {
+        store.send(Intent::Edit);
+        tick(200);
+    }
+    assert_eq!(seen.borrow().settles, 0, "no edit has been quiet for long enough");
+    tick(100);
+    assert_eq!((seen.borrow().settled, seen.borrow().settles), (3, 1), "the last edit went quiet");
+    tick(1000);
+    assert_eq!(seen.borrow().settles, 1, "it fires once");
 
     // A wake from another thread arrives on the UI thread, and a burst of them makes at most two intents.
     let (waker, listening) = on_wake(&store.intents(), || Intent::Tick);

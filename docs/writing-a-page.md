@@ -54,6 +54,27 @@ Put it in the crate with the window.
 A write's outcome must reach a store that is still alive. `Background` runs accepted work to its end, but delivers nowhere once
 its store is gone. Never tie a write to a scope that can close first.
 
+**A load that a newer one replaces, and a debounce**
+
+Both are subscriptions, so `subscriptions` tests them with no host, and nothing in the host keeps a guard by hand.
+
+- A load is keyed on its query. `subscribe` starts it with `Background::local` and returns the `Dropping`. When the query changes,
+  the store drops the old load and starts the new one. Once the answer is in the state, the state stops wanting the key.
+- A debounce is keyed on an edit count. Each edit moves the key, so the store drops the last `after` timer and starts another,
+  and only the last edit's timer fires.
+
+```rust
+fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
+    // `found_for` is the query the last answer was for.
+    let loading = (state.found_for != state.query).then(|| Running::Load(state.query.clone()));
+    let settling = (state.edits != state.settled).then_some(Running::Settle(state.edits));
+    loading.into_iter().chain(settling)
+}
+```
+
+Work on the pool can't be stopped: `Background::run` runs to its end. For that, the reducer checks that an answer is for the query
+the state still holds.
+
 **Panics**
 
 A panic in background work arrives as `Err(Panicked)`, and each feature decides what it means. `Panicked` is a
