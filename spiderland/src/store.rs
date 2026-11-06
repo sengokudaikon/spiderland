@@ -342,8 +342,8 @@ struct Inner<F: Feature> {
     effects: RefCell<VecDeque<F::Effect>>,
     /// Outputs of reduced intents, waiting for those effects.
     outputs: RefCell<VecDeque<F::Output>>,
-    listeners: RefCell<Vec<Listener<F::Output>>>,
-    /// Replaced whole when one is added, so telling them costs no copy of the list.
+    /// Replaced whole when one is added or ends, so telling them costs no copy of the list. Observers likewise.
+    listeners: RefCell<Rc<[Listener<F::Output>]>>,
     observers: RefCell<Rc<[Observer<F>]>>,
     draining: Cell<bool>,
     /// Holds only a weak reference to this store.
@@ -379,7 +379,7 @@ impl<F: Feature> Store<F> {
             queue: RefCell::new(VecDeque::new()),
             effects: RefCell::new(effects.effects.into()),
             outputs: RefCell::new(VecDeque::new()),
-            listeners: RefCell::new(Vec::new()),
+            listeners: RefCell::new(Rc::from(Vec::new())),
             observers: RefCell::new(Rc::from(Vec::new())),
             draining: Cell::new(false),
             intents: Intents(Rc::new(this.clone())),
@@ -424,7 +424,7 @@ impl<F: Feature> Store<F> {
         R: Into<Option<I>>,
     {
         let to = to.clone();
-        self.0.listeners.borrow_mut().push(Rc::new(move |output| {
+        let added: Listener<F::Output> = Rc::new(move |output| {
             if !to.is_alive() {
                 return false;
             }
@@ -432,7 +432,9 @@ impl<F: Feature> Store<F> {
                 to.send(intent);
             }
             true
-        }));
+        });
+        let mut listeners = self.0.listeners.borrow_mut();
+        *listeners = listeners.iter().cloned().chain([added]).collect();
     }
 
     /// Calls `observer` with each intent just before it is reduced and each effect just before it is performed, in the order the
@@ -611,10 +613,11 @@ impl<F: Feature> Inner<F> {
             let Some(output) = next else {
                 break;
             };
-            let listeners = self.listeners.borrow().clone();
-            for listener in &listeners {
+            let listeners = Rc::clone(&self.listeners.borrow());
+            for listener in listeners.iter() {
                 if !listener(&output) {
-                    self.listeners.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, listener));
+                    let mut kept = self.listeners.borrow_mut();
+                    *kept = kept.iter().filter(|kept| !Rc::ptr_eq(kept, listener)).cloned().collect();
                 }
             }
         }
@@ -1028,7 +1031,7 @@ mod tests {
         from.send(TalkerIntent::Say("second"));
         assert_eq!(*events.borrow(), ["from render", "to render"], "the listener it added hears the next output");
         // The first listener holds a clone of `from`: let go of it, or the two keep each other alive.
-        from.0.listeners.borrow_mut().clear();
+        *from.0.listeners.borrow_mut() = Rc::from(Vec::new());
     }
 
     #[test]
