@@ -3,7 +3,7 @@
 //!
 //! - [`bundle_catalogs`]: a build script turns `<lang>/<language>/LC_MESSAGES/<domain>.po` into the table of `Catalog`s
 //!   the app hands to `Translations`.
-//! - [`Template`]: every word in the sources, in one gettext template for translators.
+//! - [`Template`]: every word in the sources, in one gettext template for translators. It fails with an [`Error`].
 
 #![forbid(unsafe_code)]
 
@@ -11,4 +11,4 @@ mod catalogs;
 mod template;
 
 pub use catalogs::bundle_catalogs;
-pub use template::Template;
+pub use template::{Error, Template};

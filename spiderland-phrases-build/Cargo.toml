@@ -10,6 +10,7 @@ license.workspace = true
 proc-macro2.workspace = true
 rspolib.workspace = true
 syn.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

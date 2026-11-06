@@ -7,9 +7,10 @@
 use proc_macro2::{Delimiter, Group, Spacing, TokenStream, TokenTree};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::mem;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 /// Marks the file defining `phrases!`: its arms spell out the calls with metavariables, not with words.
 const MACRO_DEFINITION: &str = "macro_rules! phrases";
@@ -30,6 +31,42 @@ struct Entry {
     files: Vec<String>,
 }
 
+/// Why a template couldn't be checked or written. Each message carries its cause.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum Error {
+    /// A file or folder couldn't be read or written.
+    #[error("{}: {error}", path.display())]
+    Io {
+        /// The file or folder.
+        path: PathBuf,
+        /// What went wrong there.
+        error: io::Error,
+    },
+    /// A source holds a phrase that isn't written the way `phrases!`, `Phrase::new`, `Phrase::ctx` and `Plural::new` ask.
+    #[error("{file}: {reason}")]
+    Unreadable {
+        /// The source, as the template names it.
+        file: String,
+        /// What it holds, and what was expected.
+        reason: String,
+    },
+    /// `slint-tr-extractor` couldn't be started.
+    #[error("slint-tr-extractor, of the Slint version the views build with, could not run: {0}")]
+    NoExtractor(io::Error),
+    /// `slint-tr-extractor` ran and failed.
+    #[error("slint-tr-extractor failed: {0}")]
+    ExtractorFailed(ExitStatus),
+    /// The template on disk differs from what the sources say.
+    #[error("{path} is out of date, run `{command}`")]
+    OutOfDate {
+        /// The template, as [`Template::path`] names it.
+        path: String,
+        /// The command that writes it, as [`Template::command`] names it.
+        command: String,
+    },
+}
+
 /// One template and where its words come from. Paths are relative to `root`, and are how the template refers to files.
 pub struct Template<'a> {
     pub root: &'a Path,
@@ -46,23 +83,27 @@ pub struct Template<'a> {
 }
 
 impl Template<'_> {
-    /// Fails if the template on disk differs from what the sources say, and writes nothing.
-    pub fn check(&self) -> Result<(), String> {
+    /// Fails with [`Error::OutOfDate`] if the template on disk differs from what the sources say, and writes nothing.
+    pub fn check(&self) -> Result<(), Error> {
         let (out, _) = self.generate()?;
         if self.current().as_deref() == Some(out.as_str()) {
             Ok(())
         } else {
-            Err(format!("{} is out of date, run `{}`", self.path, self.command))
+            Err(Error::OutOfDate {
+                path: self.path.to_owned(),
+                command: self.command.to_owned(),
+            })
         }
     }
 
     /// Writes the template and says what it did.
-    pub fn write(&self) -> Result<String, String> {
+    pub fn write(&self) -> Result<String, Error> {
         let (out, count) = self.generate()?;
         let unchanged = self.current().as_deref() == Some(out.as_str());
         let path = self.root.join(self.path);
-        fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-        fs::write(&path, &out).map_err(|e| format!("{path:?}: {e}"))?;
+        let folder = path.parent().unwrap_or(self.root);
+        fs::create_dir_all(folder).map_err(|error| io_error(folder, error))?;
+        fs::write(&path, &out).map_err(|error| io_error(&path, error))?;
         Ok(format!("wrote {} ({count} phrases{})", self.path, if unchanged { ", unchanged" } else { "" }))
     }
 
@@ -71,12 +112,16 @@ impl Template<'_> {
     }
 
     /// The template's text and how many phrases it holds.
-    fn generate(&self) -> Result<(String, usize), String> {
+    fn generate(&self) -> Result<(String, usize), Error> {
         generate(self)
     }
 }
 
-fn generate(template: &Template) -> Result<(String, usize), String> {
+fn io_error(path: &Path, error: io::Error) -> Error {
+    Error::Io { path: path.to_owned(), error }
+}
+
+fn generate(template: &Template) -> Result<(String, usize), Error> {
     let root = template.root;
     let mut entries: BTreeMap<(Option<String>, String), Entry> = BTreeMap::new();
     let mut add = |found: Found, file: String| {
@@ -93,11 +138,11 @@ fn generate(template: &Template) -> Result<(String, usize), String> {
     sources.sort();
     for path in &sources {
         let file = relative(root, path);
-        let text = fs::read_to_string(path).map_err(|e| format!("{path:?}: {e}"))?;
+        let text = fs::read_to_string(path).map_err(|error| io_error(path, error))?;
         if text.contains(MACRO_DEFINITION) {
             continue;
         }
-        for found in rust_phrases(&text).map_err(|e| format!("{file}: {e}"))? {
+        for found in rust_phrases(&text).map_err(|reason| Error::Unreadable { file: file.clone(), reason })? {
             add(found, file.clone());
         }
     }
@@ -140,9 +185,9 @@ fn generate(template: &Template) -> Result<(String, usize), String> {
     Ok((out, entries.len()))
 }
 
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    for entry in fs::read_dir(dir).map_err(|e| format!("{dir:?}: {e}"))? {
-        let path = entry.map_err(|e| e.to_string())?.path();
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Error> {
+    for entry in fs::read_dir(dir).map_err(|error| io_error(dir, error))? {
+        let path = entry.map_err(|error| io_error(dir, error))?.path();
         let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
         if path.is_dir() {
             // Tests and benches show the user nothing.
@@ -301,7 +346,12 @@ fn call(tokens: &[TokenTree], at: usize) -> Option<(&'static str, &Group)> {
 
 /// The phrase a call makes: its arguments are string literals, as the crate's docs ask.
 fn call_phrase(call: &str, arguments: &Group) -> Result<Found, String> {
-    let unreadable = || format!("{call}{arguments} doesn't take string literals alone");
+    let unreadable = || {
+        format!(
+            "{call}{arguments} takes {}",
+            if call == "Phrase::new" { "one string literal" } else { "two string literals" }
+        )
+    };
     let mut texts = Vec::new();
     let mut tokens = arguments.stream().into_iter();
     while let Some(token) = tokens.next() {
@@ -410,7 +460,7 @@ fn near(tokens: &[TokenTree], at: usize) -> String {
 }
 
 /// The views' `@tr` strings, as `slint-tr-extractor` reads them, with each file they are in.
-fn view_phrases(root: &Path, folder: &str) -> Result<Vec<(Found, String)>, String> {
+fn view_phrases(root: &Path, folder: &str) -> Result<Vec<(Found, String)>, Error> {
     let mut views = Vec::new();
     slint_files(&root.join(folder), &mut views)?;
     views.sort();
@@ -422,13 +472,18 @@ fn view_phrases(root: &Path, folder: &str) -> Result<Vec<(Found, String)>, Strin
         .arg(&output)
         .args(views.iter().map(|path| relative(root, path)))
         .status()
-        .map_err(|e| format!("slint-tr-extractor, of the Slint version the views build with, could not run: {e}"));
+        .map_err(Error::NoExtractor);
     let text = fs::read_to_string(&output);
     let _ = fs::remove_file(&output);
-    if !status?.success() {
-        return Err("slint-tr-extractor failed".into());
+    let status = status?;
+    if !status.success() {
+        return Err(Error::ExtractorFailed(status));
     }
-    let text = text.map_err(|e| format!("{output:?}: {e}"))?;
+    let text = text.map_err(|error| io_error(&output, error))?;
+    let unreadable = |reason| Error::Unreadable {
+        file: "slint-tr-extractor's output".to_owned(),
+        reason,
+    };
     let mut found = Vec::new();
     for block in text.replace("\r\n", "\n").split("\n\n") {
         let mut files: Vec<String> = Vec::new();
@@ -443,11 +498,11 @@ fn view_phrases(root: &Path, folder: &str) -> Result<Vec<(Found, String)>, Strin
                     }
                 }
             } else if let Some((key, value)) = line.split_once(' ').filter(|(key, _)| matches!(*key, "msgid" | "msgid_plural" | "msgctxt")) {
-                fields.insert(key, po_string(value)?);
+                fields.insert(key, po_string(value).map_err(unreadable)?);
                 current = Some(key);
             } else if line.starts_with('"') {
                 if let Some(key) = current {
-                    let more = po_string(line)?;
+                    let more = po_string(line).map_err(unreadable)?;
                     fields.entry(key).or_default().push_str(&more);
                 }
             } else {
@@ -469,9 +524,9 @@ fn view_phrases(root: &Path, folder: &str) -> Result<Vec<(Found, String)>, Strin
     Ok(found)
 }
 
-fn slint_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    for entry in fs::read_dir(dir).map_err(|e| format!("{dir:?}: {e}"))? {
-        let path = entry.map_err(|e| e.to_string())?.path();
+fn slint_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Error> {
+    for entry in fs::read_dir(dir).map_err(|error| io_error(dir, error))? {
+        let path = entry.map_err(|error| io_error(dir, error))?.path();
         if path.is_dir() {
             slint_files(&path, out)?;
         } else if path.extension().is_some_and(|ext| ext == "slint") {
@@ -662,5 +717,36 @@ mod tests {
             let joined: String = quoted.split(NEWLINE).map(|piece| po_string(piece).unwrap()).collect();
             assert_eq!(joined, text);
         }
+    }
+
+    /// A template over `root`, reading Rust from `src` and views from `ui`.
+    fn template(root: &Path) -> Template<'_> {
+        Template {
+            root,
+            path: "lang/app.pot",
+            project: "app",
+            command: "write the template",
+            sources: &["src"],
+            views: "ui",
+        }
+    }
+
+    #[test]
+    fn a_folder_it_cannot_read_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = template(dir.path()).check().unwrap_err();
+        assert!(matches!(&error, Error::Io { path, .. } if *path == dir.path().join("src")), "{error}");
+        assert!(error.to_string().starts_with(&format!("{}: ", dir.path().join("src").display())), "{error}");
+    }
+
+    #[test]
+    fn a_source_it_cannot_read_is_named_with_what_it_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "const A: Phrase = Phrase::new(NAME);").unwrap();
+        let error = template(dir.path()).write().unwrap_err();
+        assert!(matches!(&error, Error::Unreadable { file, .. } if file == "src/lib.rs"), "{error}");
+        assert_eq!(error.to_string(), "src/lib.rs: Phrase::new(NAME) takes one string literal");
+        assert!(!dir.path().join("lang").exists(), "and nothing is written");
     }
 }

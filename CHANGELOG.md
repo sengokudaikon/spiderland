@@ -54,6 +54,9 @@ tag makes a GitHub release from that version's section.
   `Translations::new` fails with `spiderland_phrases::Error` rather than a `String`. Handle the result where `select_language`
   is called, for example with `expect`, beside a test that runs `Translations::new` on the same catalogs. `spiderland-phrases`
   now depends on `thiserror`.
+- **Breaking:** `spiderland-phrases-build`'s `Template::check` and `Template::write` fail with `spiderland_phrases_build::Error`
+  rather than a `String`. Its cases say which file and what went wrong, and it is `#[non_exhaustive]`. Where a caller joins it
+  with `String` errors, add `.map_err(|error| error.to_string())` to the call.
 
 ### Fixed
 

@@ -63,7 +63,7 @@ The `spiderland` crate docs add a `Host` and a `Store` to this.
 | `spiderland` | One-way UI state | `tokio`'s channels |
 | `spiderland-slint` | What a Slint host needs | `spiderland`, `spiderland-phrases`, Slint, `tokio`'s channels |
 | `spiderland-phrases` | Words and numbers, ready for translation | `thiserror`, and one Windows call |
-| `spiderland-phrases-build` | Build-time catalogs and the gettext template | `rspolib`, `proc-macro2` and `syn` |
+| `spiderland-phrases-build` | Build-time catalogs and the gettext template | `rspolib`, `proc-macro2`, `syn` and `thiserror` |
 
 Feature crates take `spiderland` and `spiderland-phrases`, and stay free of Slint. The framework creates no tasks: the app gives
 `Background` a way to start a job on its own pool.
