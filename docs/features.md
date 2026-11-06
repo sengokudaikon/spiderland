@@ -9,6 +9,8 @@
 | `Store` | Runs the two on the UI thread, and queues intents sent while it works. |
 | `Intents::send_all`, `Store::send_all` | Send several intents as one batch, so the render and the effects come after all of them. |
 | `Store::ask` | Sends an intent and reads what it did, for a view callback that returns a value. |
+| `Store::try_read` | Answers a view's question from the state, for a pure callback that a binding calls. |
+| `Store::with_state` | Changes the state directly, for a test or a capture to set up. Nothing renders until the next intent. |
 | `Feature::Output`, `Effects::emit` | Let a reducer tell whoever listens. `Never` is for a feature that tells no one. |
 | `Store::forward` | Turns one store's outputs into another store's intents. |
 | `Store::observe`, `Seen` | Shows each intent and effect as the store runs it, for a trail of what led to a fault. |
@@ -16,19 +18,22 @@
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
 | `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |
-| `Tracked`, `Slice` | Redo only the parts of a render whose inputs changed. |
-| `Slice::show`, `Input` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none can be left out. |
+| `Tracked`, `Slice` | Redo only the parts of a render whose inputs changed. A `Version` names one state of a `Tracked`. |
+| `Slice::show`, `Input`, `Inputs` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none can be left out. |
 | `CheckedSlice` | A `Slice` that fails a test build when its key misses an input. |
 | `Feature::subscriptions`, `Host::subscribe` | The feature names what its state wants running, the host starts it, and the store stops it once it isn't wanted. |
 | `Subscriptions` | Keeps things running by key. The store uses it for a feature's subscriptions. |
+| `Background::new`, `Job` | Takes the app's way to start a `Job` on its pool, which says whether the pool took it. |
 | `Background::run` | Runs work on the app's pool and sends the result back as an intent. A panic arrives as `Err(Panicked)`. |
 | `Background::wait` | Awaits an answer on the UI thread, with no pool thread held, and sends it back as an intent. |
 | `Background::local` | Awaits work on the UI thread that can be dropped at any moment, even from inside its own result. `Dropping` is its guard. |
 | `Background::finish` | Awaits work on the UI thread whose result must always be heard. |
-| `on_watch`, `on_wake` | Let a service on another thread tell a feature that something changed. `Listening` is their guard. |
+| `Background::pending` | Counts work whose result hasn't come back yet, for a test to wait on. |
+| `on_watch`, `on_wake` | Let a service on another thread tell a feature that something changed. `Listening` is their guard, and `on_wake`'s `Waker` fires it. |
 | `EventLoop` | The one thing `Background` and the listeners need from a toolkit: running a future on the UI thread. |
 | `Effects::scoped` | Runs a child scope's reducer inside its parent's. |
-| `step` | Runs one reducer step in a test, with no host, and returns its effects and outputs. |
+| `Effects::detached` | A list no store performs, to run code shared with the reducer outside it. |
+| `step`, `Step` | Runs one reducer step in a test, with no host, and returns its effects and outputs. |
 | `start` | Runs `Feature::start` in a test, with no host, and returns its effects. |
 | `subscriptions` | Lists what a state wants running, in a test, with no host. |
 | `callbacks!` | Maps a view's callbacks to intents, one per line. |

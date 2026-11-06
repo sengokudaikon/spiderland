@@ -46,7 +46,7 @@ impl From<Phrase> for String {
     }
 }
 
-/// A sentence about a count, in as many forms as the user's language has: `Plural::new("{n} draft", "{n} drafts")`.
+/// A sentence about a count, in as many forms as the user's language has: `Plural::new("{n} file", "{n} files")`.
 /// English has two, the first for one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Plural {
@@ -142,15 +142,15 @@ mod tests {
     #[test]
     fn values_fill_their_names_and_nothing_else() {
         phrases! { Added: "Added {name}, {count} times. {missing} stays." }
-        assert_eq!(Added.with(&[("name", &"Loom"), ("count", &3)]), "Added Loom, 3 times. {missing} stays.");
+        assert_eq!(Added.with(&[("name", &"notes.txt"), ("count", &3)]), "Added notes.txt, 3 times. {missing} stays.");
         assert_eq!(Phrase::new("No braces").with(&[]), "No braces");
         assert_eq!(Phrase::new("Open { only").with(&[("only", &1)]), "Open { only");
     }
 
     #[test]
     fn english_counts_and_lists() {
-        phrases! { Drafts: "{n} draft" | "{n} drafts" }
-        assert_eq!([Drafts.count(0), Drafts.count(1), Drafts.count(2)], ["0 drafts", "1 draft", "2 drafts"]);
+        phrases! { Files: "{n} file" | "{n} files" }
+        assert_eq!([Files.count(0), Files.count(1), Files.count(2)], ["0 files", "1 file", "2 files"]);
         assert_eq!(Plural::new("{n} file in {place}", "{n} files in {place}").with(3, &[("place", &"Logs")]), "3 files in Logs");
         assert_eq!(list::<&str>(&[], Conjunction::And), "");
         assert_eq!(list(&["a"], Conjunction::And), "a");

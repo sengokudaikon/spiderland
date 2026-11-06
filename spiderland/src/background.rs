@@ -41,6 +41,17 @@ impl Drop for Delivered {
 }
 
 /// Starts work on the app's pool, and waits on the UI thread run by `L`. Clone it into whatever hosts a feature.
+///
+/// Its four ways in differ in where the work runs and how its result comes back:
+///
+/// | Method | The work | Its result |
+/// |---|---|---|
+/// | [`run`](Background::run) | Runs on the app's pool | Goes to the store as an intent. A panic arrives as [`Panicked`]. |
+/// | [`wait`](Background::wait) | Is awaited on the UI thread | Goes to the store as an intent. |
+/// | [`finish`](Background::finish) | Is awaited on the UI thread | Goes to a closure, always. |
+/// | [`local`](Background::local) | Is awaited on the UI thread | Goes to a closure, unless the returned guard is dropped first. |
+///
+/// Only `local` can be stopped. The others run to their end, and a result sent to a store that is gone goes nowhere.
 pub struct Background<L> {
     start: Arc<dyn Fn(Job) -> bool + Send + Sync>,
     /// Accepted work whose result hasn't been delivered yet.

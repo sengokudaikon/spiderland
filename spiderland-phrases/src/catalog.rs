@@ -122,7 +122,7 @@ mod tests {
                 entries: &[
                     (None, "Delete", &["Löschen"]),
                     (Some("key"), "Delete", &["Entf"]),
-                    (None, "{n} draft", &["{n} Entwurf", "{n} Entwürfe"]),
+                    (None, "{n} file", &["{n} Datei", "{n} Dateien"]),
                 ],
             },
             Catalog {
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(german.text(None, "Delete"), Some("Löschen"));
         assert_eq!(german.text(Some("key"), "Delete"), Some("Entf"));
         assert_eq!(german.text(None, "Undo"), None);
-        assert_eq!([german.plural("{n} draft", 1), german.plural("{n} draft", 3)], [Some("{n} Entwurf"), Some("{n} Entwürfe")]);
+        assert_eq!([german.plural("{n} file", 1), german.plural("{n} file", 3)], [Some("{n} Datei"), Some("{n} Dateien")]);
         static BROKEN: [Catalog; 1] = [Catalog {
             language: "xx",
             plural: "n !=",

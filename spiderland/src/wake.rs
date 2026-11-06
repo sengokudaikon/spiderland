@@ -54,9 +54,9 @@ pub(crate) fn droppable<L: EventLoop, T: 'static>(work: impl Future<Output = T> 
     Dropping(guard)
 }
 
-/// Stops listening when dropped, so it can be a guard for [`Subscriptions`](crate::Subscriptions). That is safe from inside
-/// the intent the listener itself sent: nothing is sent after that, and what the listener holds is let go of on the next turn
-/// of the event loop, with no need for anything further to be published.
+/// Stops listening when dropped, so it can be a guard for [`Subscriptions`](crate::Subscriptions). It can be dropped at any
+/// moment, even while the store handles an intent this listener sent. Nothing is sent after that, and what the listener holds
+/// goes on the next turn of the event loop, without waiting for another update.
 #[derive(Debug)]
 #[must_use = "dropping it stops listening at once"]
 pub struct Listening {

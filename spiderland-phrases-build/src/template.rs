@@ -671,7 +671,7 @@ mod tests {
                 #[cfg(windows)]
                 pub Added: "Added {name}." // braces in the English do not end the block
                 pub(super) Key: "key" => "Delete"
-                Drafts: "{n} draft" | "{n} drafts"
+                Files: "{n} file" | "{n} files"
                 Split: "one \
                         two"
             }
@@ -690,7 +690,7 @@ mod tests {
             [
                 entry(None, "Added {name}.", None),
                 entry(Some("key"), "Delete", None),
-                entry(None, "{n} draft", Some("{n} drafts")),
+                entry(None, "{n} file", Some("{n} files")),
                 entry(None, "one two", None),
                 entry(None, "Inside a function", None),
                 entry(None, "After the blocks", None),

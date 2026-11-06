@@ -38,6 +38,67 @@ pub trait Feature: 'static {
 
     /// The subscriptions `state` wants, each key once. After each batch's render, the store starts the new ones and drops the
     /// ones no longer wanted, which stops them, so what runs follows the state alone. Wants none unless a feature says otherwise.
+    ///
+    /// A clock that ticks while it shows, and the host that starts it:
+    ///
+    /// ```
+    /// use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+    /// use std::any::Any;
+    /// use std::cell::Cell;
+    /// use std::rc::Rc;
+    ///
+    /// struct Clock;
+    /// #[derive(Debug, PartialEq)]
+    /// struct Tick;
+    ///
+    /// impl Feature for Clock {
+    ///     // Whether the clock shows.
+    ///     type State = bool;
+    ///     type Intent = bool;
+    ///     type Effect = Never;
+    ///     type Output = Never;
+    ///     type Subscription = Tick;
+    ///
+    ///     fn reduce(showing: &mut bool, show: bool, _: &mut Effects<Never>) {
+    ///         *showing = show;
+    ///     }
+    ///
+    ///     fn subscriptions(showing: &bool) -> impl IntoIterator<Item = Tick> {
+    ///         showing.then_some(Tick)
+    ///     }
+    /// }
+    ///
+    /// // Tested with no host.
+    /// assert_eq!(spiderland::subscriptions::<Clock>(&true), [Tick]);
+    ///
+    /// // Stands in for a timer: it runs while its guard lives.
+    /// struct Running(Rc<Cell<bool>>);
+    /// impl Drop for Running {
+    ///     fn drop(&mut self) {
+    ///         self.0.set(false);
+    ///     }
+    /// }
+    ///
+    /// struct ClockHost(Rc<Cell<bool>>);
+    /// impl Host<Clock> for ClockHost {
+    ///     fn render(&mut self, _: &bool, _: &Intents<bool>) {}
+    ///     fn perform(&mut self, effect: Never, _: &Intents<bool>) {
+    ///         match effect {}
+    ///     }
+    ///     // A Slint host returns the timer from `spiderland_slint::every` here.
+    ///     fn subscribe(&mut self, _: &Tick, _: &Intents<bool>) -> Box<dyn Any> {
+    ///         self.0.set(true);
+    ///         Box::new(Running(Rc::clone(&self.0)))
+    ///     }
+    /// }
+    ///
+    /// let ticking = Rc::new(Cell::new(false));
+    /// let store = Store::new(false, ClockHost(Rc::clone(&ticking)));
+    /// store.send(true);
+    /// assert!(ticking.get());
+    /// store.send(false);
+    /// assert!(!ticking.get(), "the store dropped the guard once the clock was hidden");
+    /// ```
     fn subscriptions(state: &Self::State) -> impl IntoIterator<Item = Self::Subscription> {
         let _ = state;
         []
@@ -56,7 +117,8 @@ pub struct Effects<E, O = Never> {
 }
 
 impl<E, O> Effects<E, O> {
-    /// A list no one performs, for code shared with the reducer that only reads when it runs outside it, as a view does.
+    /// A list no store performs. Code shared with the reducer can take it to run outside `reduce`, as a view does to see what that
+    /// code decides, and what it asks for there is dropped.
     pub fn detached() -> Self {
         Effects {
             effects: Vec::new(),

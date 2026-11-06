@@ -67,7 +67,7 @@ impl<T> DerefMut for Tracked<T> {
 }
 
 /// One part of a render, redone only when its key changes. The key is usually the versions of what that part reads:
-/// `(drafts.version(), writes.version())`. A key missing an input shows stale values, so keep it beside the function it
+/// `(files.version(), filter.version())`. A key missing an input shows stale values, so keep it beside the function it
 /// guards, which should take only those inputs. [`Slice::show`] makes the key from that function's inputs, so it can't miss one.
 #[derive(Debug)]
 pub struct Slice<K> {

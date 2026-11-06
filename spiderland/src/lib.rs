@@ -9,6 +9,10 @@
 //! timer tick ────┘               └────► Effect ─► Host::perform ─► finished work
 //! ```
 //!
+//! A store works in batches. A batch is the intents waiting when the store gets to work. It reduces them all, renders once,
+//! starts and stops subscriptions, performs their effects in order, and then sends their outputs. An intent sent from any of
+//! that, such as by an effect that finishes at once, waits for the next batch, so the state is never borrowed twice.
+//!
 //! A whole feature, with the host a test or a window would give it:
 //!
 //! ```

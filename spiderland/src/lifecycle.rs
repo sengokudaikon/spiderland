@@ -107,7 +107,8 @@ pub enum CloseAnswer {
 }
 
 /// A parent's wait for its children's answers, kept in its state. Each child gets one vote, and one child staying open keeps the
-/// window open. Answers still come in from the rest, so a child that said closed may have finished its work by then.
+/// window open. It waits for every answer even so: by the time the window stays open, a child that answered closed may have done
+/// its closing work, such as a save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closing {
     waiting: usize,

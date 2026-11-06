@@ -20,13 +20,13 @@ Declare words in a `phrases!` block beside the code that uses them:
 spiderland_phrases::phrases! {
     AddItem: "Add item"
     Added: "Added {name}."
-    SealNormal: "seal" => "Normal"
-    Drafts: "{n} draft" | "{n} drafts"
+    OpenVerb: "verb" => "Open"
+    Files: "{n} file" | "{n} files"
 }
 
 assert_eq!(AddItem.get(), "Add item");
-assert_eq!(Added.with(&[("name", &"Loom")]), "Added Loom.");
-assert_eq!(Drafts.count(2), "2 drafts");
+assert_eq!(Added.with(&[("name", &"notes.txt")]), "Added notes.txt.");
+assert_eq!(Files.count(2), "2 files");
 ```
 
 - Values go in by name through `Phrase::with`, so a translation can move them.
