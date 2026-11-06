@@ -30,6 +30,8 @@ tag makes a GitHub release from that version's section.
 - `docs/writing-a-page.md`: rules for text boxes, `changed` and lists inside rows, each checked against a real view.
 - `spiderland`: `Slice::show`, with `Input` and `Inputs`. It makes a part of a render with a plain `fn` of what it reads, and keys
   it on the same inputs, so none can be left out.
+- `spiderland`: `Store::observe` and `Seen`, which show each intent just before it is reduced and each effect just before it is
+  performed. The observer gets a reference, so nothing is copied and nothing needs `Debug`.
 
 ### Changed
 

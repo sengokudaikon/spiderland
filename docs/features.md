@@ -10,6 +10,7 @@
 | `Store::ask` | Sends an intent and reads what it did, for a view callback that returns a value. |
 | `Feature::Output`, `Effects::emit` | Let a reducer tell whoever listens. `Never` is for a feature that tells no one. |
 | `Store::forward` | Turns one store's outputs into another store's intents. |
+| `Store::observe`, `Seen` | Shows each intent and effect as the store runs it, for a trail of what led to a fault. |
 | `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, and ask whether they can close. |
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |

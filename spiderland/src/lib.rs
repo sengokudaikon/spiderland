@@ -72,6 +72,8 @@
 //!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
 //!
+//! [`Store::observe`] shows each intent and effect as a store runs it, so an app can keep a trail of what led to a fault.
+//!
 //! What this leaves out on purpose:
 //! - **Outside state as a separate input.** A worker's snapshot reaches a feature as an intent and is kept in its state, so
 //!   a render reads one consistent snapshot rather than asking a live handle row by row.
@@ -88,6 +90,6 @@ mod tracked;
 
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::Pulse;
-pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Step, Store, start, step};
+pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Seen, Step, Store, start, step};
 pub use subscriptions::Subscriptions;
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};
