@@ -5,7 +5,7 @@
 //! A window that closes once its editor has saved:
 //!
 //! ```
-//! use spiderland::{CloseAnswer, Closing, Effects, Feature, Host, Intents, Lifecycle, Store};
+//! use spiderland::{CloseAnswer, Closing, Effects, Feature, Host, Intents, Lifecycle, Never, Store};
 //!
 //! struct Window;
 //! enum WindowIntent {
@@ -17,6 +17,7 @@
 //!     type Intent = WindowIntent;
 //!     type Effect = &'static str;
 //!     type Output = Lifecycle;
+//!     type Subscription = Never;
 //!
 //!     fn reduce(closing: &mut Option<Closing>, intent: WindowIntent, effects: &mut Effects<&'static str, Lifecycle>) {
 //!         match intent {
@@ -47,6 +48,7 @@
 //!     type Intent = EditorIntent;
 //!     type Effect = &'static str;
 //!     type Output = CloseAnswer;
+//!     type Subscription = Never;
 //!
 //!     fn reduce(_: &mut (), intent: EditorIntent, effects: &mut Effects<&'static str, CloseAnswer>) {
 //!         match intent {

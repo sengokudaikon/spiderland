@@ -19,7 +19,8 @@
 | `Tracked`, `Slice` | Redo only the parts of a render whose inputs changed. |
 | `Slice::show`, `Input` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none can be left out. |
 | `CheckedSlice` | A `Slice` that fails a test build when its key misses an input. |
-| `Subscriptions` | Keep timers and watchers running for as long as the state wants them. |
+| `Feature::subscriptions`, `Host::subscribe` | The feature names what its state wants running, the host starts it, and the store stops it once it isn't wanted. |
+| `Subscriptions` | Keeps things running by key. The store uses it for a feature's subscriptions. |
 | `Background::run` | Runs work on the app's pool and sends the result back as an intent. A panic arrives as `Err(Panicked)`. |
 | `Background::wait` | Awaits an answer on the UI thread, with no pool thread held, and sends it back as an intent. |
 | `Background::local` | Awaits work on the UI thread that can be dropped at any moment, even from inside its own result. `Dropping` is its guard. |
@@ -29,6 +30,7 @@
 | `Effects::scoped` | Runs a child scope's reducer inside its parent's. |
 | `step` | Runs one reducer step in a test, with no host, and returns its effects and outputs. |
 | `start` | Runs `Feature::start` in a test, with no host, and returns its effects. |
+| `subscriptions` | Lists what a state wants running, in a test, with no host. |
 | `callbacks!` | Maps a view's callbacks to intents, one per line. |
 
 ## Slint host: `spiderland-slint`

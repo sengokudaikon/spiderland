@@ -1,5 +1,7 @@
 //! The reducer's contract and the store that runs it.
 
+use crate::Subscriptions;
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
@@ -14,6 +16,14 @@ pub trait Feature: 'static {
     type Effect: 'static;
     /// What this feature tells whoever listens, through [`Store::forward`]. A feature that tells no one says [`Never`].
     type Output: 'static;
+    /// Something that runs for as long as the state wants it, such as a timer or a watch on a service, as a key the host
+    /// starts in [`Host::subscribe`]. With the `nightly` feature it is [`Never`] unless a feature says otherwise.
+    #[cfg(feature = "nightly")]
+    type Subscription: PartialEq + 'static = Never;
+    /// Something that runs for as long as the state wants it, such as a timer or a watch on a service, as a key the host
+    /// starts in [`Host::subscribe`]. A feature that wants none says [`Never`].
+    #[cfg(not(feature = "nightly"))]
+    type Subscription: PartialEq + 'static;
 
     fn reduce(state: &mut Self::State, intent: Self::Intent, effects: &mut Effects<Self::Effect, Self::Output>);
 
@@ -21,6 +31,13 @@ pub trait Feature: 'static {
     /// emit, because nothing can be listening yet. Does nothing unless a feature says otherwise.
     fn start(state: &mut Self::State, effects: &mut Effects<Self::Effect>) {
         let _ = (state, effects);
+    }
+
+    /// The subscriptions `state` wants, each key once. After each batch's render, the store starts the new ones and drops the
+    /// ones no longer wanted, which stops them, so what runs follows the state alone. Wants none unless a feature says otherwise.
+    fn subscriptions(state: &Self::State) -> impl IntoIterator<Item = Self::Subscription> {
+        let _ = state;
+        []
     }
 }
 
@@ -102,6 +119,11 @@ pub fn start<F: Feature>(state: &mut F::State) -> Vec<F::Effect> {
     effects.effects
 }
 
+/// [`Feature::subscriptions`], for tests: what `state` wants running, in order.
+pub fn subscriptions<F: Feature>(state: &F::State) -> Vec<F::Subscription> {
+    F::subscriptions(state).into_iter().collect()
+}
+
 /// Background work panicked. Finished work hands this to its feature, which decides what the failure means there: a
 /// fault in one feature's work is not automatically a fault in the app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +136,16 @@ pub trait Host<F: Feature>: 'static {
 
     /// Starts one effect. Work that finishes later sends its result through `intents`.
     fn perform(&mut self, effect: F::Effect, intents: &Intents<F::Intent>);
+
+    /// Starts one subscription the state wants, and returns its guard: dropping the guard must stop it. The store drops it once
+    /// the state no longer wants `key`, or when the store goes.
+    ///
+    /// A host whose feature wants no subscriptions leaves this out. One whose feature wants some must write it. Nothing checks
+    /// that as it builds: the first key the state wants panics instead.
+    fn subscribe(&mut self, key: &F::Subscription, intents: &Intents<F::Intent>) -> Box<dyn Any> {
+        let _ = (key, intents);
+        panic!("{} wants a subscription, and its host doesn't write `Host::subscribe`", std::any::type_name::<F>())
+    }
 }
 
 trait Sink<I> {
@@ -204,6 +236,8 @@ type Observer<F> = Rc<dyn Fn(Seen<'_, F>)>;
 
 struct Inner<F: Feature> {
     state: RefCell<F::State>,
+    /// Declared before the host, so what runs stops before the host goes.
+    subscriptions: RefCell<Subscriptions<F::Subscription>>,
     host: RefCell<Box<dyn Host<F>>>,
     queue: RefCell<VecDeque<F::Intent>>,
     /// Effects of reduced intents, waiting for the render that goes before them.
@@ -236,6 +270,7 @@ impl<F: Feature> Store<F> {
         F::start(&mut state, &mut effects);
         let inner = Rc::new_cyclic(|this: &Weak<Inner<F>>| Inner {
             state: RefCell::new(state),
+            subscriptions: RefCell::default(),
             host: RefCell::new(Box::new(host) as Box<dyn Host<F>>),
             queue: RefCell::new(VecDeque::new()),
             effects: RefCell::new(effects.effects.into()),
@@ -324,6 +359,7 @@ impl<F: Feature> Store<F> {
     ///     type Intent = Intent;
     ///     type Effect = Effect;
     ///     type Output = Never;
+    ///     type Subscription = Never;
     ///
     ///     fn reduce(count: &mut i32, intent: Intent, effects: &mut Effects<Effect>) {
     ///         match intent {
@@ -399,7 +435,15 @@ impl<F: Feature> Inner<F> {
         let _draining = Draining::start(&self.draining);
         let mut host = self.host.borrow_mut();
         host.render(&self.state.borrow(), &self.intents);
+        self.subscribe(&mut **host);
         self.perform_effects(&mut **host);
+    }
+
+    /// Starts what the state wants and stops what it no longer wants. The state's borrow ends before the host runs, and what a
+    /// subscription sends as it starts waits for the next batch.
+    fn subscribe(&self, host: &mut dyn Host<F>) {
+        let wanted: Vec<F::Subscription> = F::subscriptions(&self.state.borrow()).into_iter().collect();
+        self.subscriptions.borrow_mut().sync_boxed(wanted, |key| host.subscribe(key, &self.intents));
     }
 
     fn perform_effects(&self, host: &mut dyn Host<F>) {
@@ -439,6 +483,7 @@ impl<F: Feature> Inner<F> {
             {
                 let mut host = self.host.borrow_mut();
                 host.render(&self.state.borrow(), &self.intents);
+                self.subscribe(&mut **host);
                 self.perform_effects(&mut **host);
             }
             self.tell_listeners();
@@ -508,6 +553,7 @@ mod tests {
         type Intent = Intent;
         type Effect = Effect;
         type Output = Never;
+        type Subscription = Never;
 
         fn reduce(state: &mut i32, intent: Intent, effects: &mut Effects<Effect>) {
             match intent {
@@ -607,6 +653,7 @@ mod tests {
             type Intent = bool;
             type Effect = ();
             type Output = Never;
+            type Subscription = Never;
             fn reduce(state: &mut i32, panic_now: bool, _: &mut Effects<()>) {
                 assert!(!panic_now);
                 *state += 1;
@@ -684,6 +731,7 @@ mod tests {
             type Intent = Option<i32>;
             type Effect = i32;
             type Output = Never;
+            type Subscription = Never;
             fn reduce(state: &mut i32, intent: Option<i32>, effects: &mut Effects<i32>) {
                 effects.push(-1);
                 let by = intent.expect("this intent panics");
@@ -739,6 +787,7 @@ mod tests {
             type Intent = ParentIntent;
             type Effect = ParentEffect;
             type Output = Never;
+            type Subscription = Never;
             fn reduce(state: &mut Option<i32>, intent: ParentIntent, effects: &mut Effects<ParentEffect>) {
                 match (intent, state.as_mut()) {
                     (ParentIntent::Child(intent), Some(child)) => effects.scoped(ParentEffect::Child, |effects| Counter::reduce(child, intent, effects)),
@@ -779,6 +828,7 @@ mod tests {
         type Intent = TalkerIntent;
         type Effect = &'static str;
         type Output = Said;
+        type Subscription = Never;
 
         fn reduce(_: &mut (), intent: TalkerIntent, effects: &mut Effects<&'static str, Said>) {
             match intent {
@@ -914,6 +964,7 @@ mod tests {
         type Intent = i32;
         type Effect = i32;
         type Output = Never;
+        type Subscription = Never;
 
         fn reduce(state: &mut i32, by: i32, _: &mut Effects<i32>) {
             *state += by;
@@ -968,6 +1019,7 @@ mod tests {
         type Intent = NestingIntent;
         type Effect = Effect;
         type Output = Never;
+        type Subscription = Never;
 
         fn reduce(state: &mut i32, NestingIntent::Child(intent): NestingIntent, effects: &mut Effects<Effect>) {
             Counter::reduce(state, intent, effects);
@@ -1044,6 +1096,7 @@ mod tests {
             type Intent = &'static str;
             type Effect = ();
             type Output = Never;
+            type Subscription = Never;
             fn reduce(_: &mut (), intent: &'static str, _: &mut Effects<()>) {
                 assert_ne!(intent, "bad", "a fault in the reducer, expected by this test");
             }
@@ -1091,6 +1144,118 @@ mod tests {
         assert_eq!(*second.borrow(), ["add 2"]);
         // The adding observer holds a clone of `store`: let go of it, or the two keep each other alive.
         *store.0.observers.borrow_mut() = Rc::from(Vec::new());
+    }
+
+    /// Wants ticks and saves watched as its state says. It sets the state it is sent, and asks for one effect each time.
+    struct Watcher;
+
+    #[derive(Debug, PartialEq)]
+    enum Watch {
+        Ticks,
+        Saves,
+    }
+
+    impl Feature for Watcher {
+        type State = (bool, bool);
+        type Intent = (bool, bool);
+        type Effect = &'static str;
+        type Output = Never;
+        type Subscription = Watch;
+
+        fn reduce(state: &mut (bool, bool), wanted: (bool, bool), effects: &mut Effects<&'static str>) {
+            *state = wanted;
+            effects.push("after");
+        }
+
+        fn subscriptions(&(ticks, saves): &(bool, bool)) -> impl IntoIterator<Item = Watch> {
+            [ticks.then_some(Watch::Ticks), saves.then_some(Watch::Saves)].into_iter().flatten()
+        }
+    }
+
+    /// Logs when what it started stops.
+    struct Stops(Events, &'static str);
+
+    impl Drop for Stops {
+        fn drop(&mut self) {
+            self.0.borrow_mut().push(format!("stop {}", self.1));
+        }
+    }
+
+    /// Shows nothing, as a host whose window is gone, and logs what runs.
+    struct Windowless(Events);
+
+    impl Host<Watcher> for Windowless {
+        fn render(&mut self, _: &(bool, bool), _: &Intents<(bool, bool)>) {
+            self.0.borrow_mut().push("render".to_owned());
+        }
+
+        fn perform(&mut self, effect: &'static str, _: &Intents<(bool, bool)>) {
+            self.0.borrow_mut().push(format!("perform {effect}"));
+        }
+
+        fn subscribe(&mut self, key: &Watch, _: &Intents<(bool, bool)>) -> Box<dyn Any> {
+            let name = match key {
+                Watch::Ticks => "ticks",
+                Watch::Saves => "saves",
+            };
+            self.0.borrow_mut().push(format!("start {name}"));
+            Box::new(Stops(Rc::clone(&self.0), name))
+        }
+    }
+
+    #[test]
+    fn what_runs_follows_the_state_alone_whatever_the_host_renders() {
+        let events = Events::default();
+        let take = || std::mem::take(&mut *events.borrow_mut());
+        let store = Store::new((true, false), Windowless(Rc::clone(&events)));
+        assert_eq!(take(), ["render", "start ticks"]);
+        store.send((true, true));
+        assert_eq!(take(), ["render", "start saves", "perform after"], "after the render, before the effects");
+        store.send((false, true));
+        assert_eq!(take(), ["render", "stop ticks", "perform after"]);
+        store.send((false, true));
+        assert_eq!(take(), ["render", "perform after"], "a key still wanted keeps running");
+        drop(store);
+        assert_eq!(take(), ["stop saves"], "and what runs stops with the store");
+    }
+
+    #[test]
+    fn what_a_state_wants_is_tested_with_no_host() {
+        assert_eq!(subscriptions::<Watcher>(&(true, true)), [Watch::Ticks, Watch::Saves]);
+        assert_eq!(subscriptions::<Watcher>(&(false, true)), [Watch::Saves]);
+        assert!(subscriptions::<Counter>(&0).is_empty(), "a feature that doesn't say otherwise wants nothing");
+    }
+
+    /// The only place the default is used: every other feature here names its type, so the crate builds on stable.
+    #[cfg(feature = "nightly")]
+    #[test]
+    fn with_nightly_a_feature_that_wants_nothing_leaves_its_subscription_type_out() {
+        struct Plain;
+        impl Feature for Plain {
+            type State = ();
+            type Intent = ();
+            type Effect = ();
+            type Output = Never;
+            fn reduce(_: &mut (), (): (), _: &mut Effects<()>) {}
+        }
+        struct Quiet;
+        impl Host<Plain> for Quiet {
+            fn render(&mut self, _: &(), _: &Intents<()>) {}
+            fn perform(&mut self, (): (), _: &Intents<()>) {}
+        }
+        assert!(subscriptions::<Plain>(&()).is_empty());
+        Store::new((), Quiet).send(());
+    }
+
+    #[test]
+    #[should_panic(expected = "wants a subscription, and its host doesn't write `Host::subscribe`")]
+    fn a_host_that_starts_nothing_for_a_feature_that_wants_something_panics() {
+        struct Forgetful;
+        impl Host<Watcher> for Forgetful {
+            fn render(&mut self, _: &(bool, bool), _: &Intents<(bool, bool)>) {}
+            fn perform(&mut self, _: &'static str, _: &Intents<(bool, bool)>) {}
+        }
+        let _store = Store::new((true, false), Forgetful);
     }
 
     #[test]

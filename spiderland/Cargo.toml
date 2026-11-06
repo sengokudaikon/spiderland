@@ -6,6 +6,12 @@ edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+# `nightly`: `Feature::Subscription` defaults to `Never`, through associated type defaults, so a feature that wants no
+# subscriptions leaves it out. It needs a nightly compiler. Without it the crate builds on stable, and every feature names the
+# type.
+nightly = []
+
 [dependencies]
 # Channels only, for work that comes back to the UI thread. No runtime: the app brings its own pool.
 tokio.workspace = true

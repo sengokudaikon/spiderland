@@ -10,6 +10,8 @@ Put it in a crate without Slint.
 - Anything that touches a disk, a process or a worker is an `Effect`. Its result comes back as an `Intent`.
 - Anything from outside, such as a worker's snapshot, arrives as an intent and is kept in the state.
 - First loads go in `Feature::start`, not in intents the host sends after building the store.
+- What runs while the state wants it, such as a timer or a watch on a service, is a `Subscription`. `Feature::subscriptions` lists
+  what a state wants, including what always runs. Test it with `subscriptions`.
 - To tell another feature something, `emit` an `Output`. Whoever builds the two stores connects them with `Store::forward`, straight
   after building them.
 
@@ -26,8 +28,10 @@ Put it next to the feature.
 Put it in the crate with the window.
 
 - `callbacks!` maps view callbacks to intents, and does nothing else.
-- `render` runs each `Slice`, and syncs `Rows` and `Subscriptions`.
+- `render` runs each `Slice`, and syncs `Rows`. It does nothing else, so it can stop early when the window is gone.
 - `perform` matches on the effect.
+- `subscribe` matches on the key, starts what it names, and returns its guard. The store drops the guard when the state stops
+  wanting the key, whether or not `render` ran.
 - Work that comes back with two things, such as a fresh snapshot and its answer, sends them with `send_all`, so no render or effect
   sees one without the other.
 

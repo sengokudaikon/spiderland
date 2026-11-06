@@ -37,6 +37,7 @@ impl Feature for Counter {
     type Intent = Intent;
     type Effect = Effect;
     type Output = Never;
+    type Subscription = Never;
 
     fn reduce(state: &mut State, intent: Intent, effects: &mut Effects<Effect>) {
         match intent {
@@ -75,6 +76,13 @@ The crates are not on crates.io. Take them from git:
 [dependencies]
 spiderland = { git = "https://github.com/sengokudaikon/spiderland" }
 spiderland-slint = { git = "https://github.com/sengokudaikon/spiderland" }
+```
+
+The crates build on stable. On a nightly compiler, turn on `spiderland`'s `nightly` feature, and a feature that wants no
+subscriptions can leave out `type Subscription = Never;`:
+
+```toml
+spiderland = { git = "https://github.com/sengokudaikon/spiderland", features = ["nightly"] }
 ```
 
 `spiderland` pins `tokio = "=1.53.3"`, and `spiderland-slint` also pins `slint = "=1.18.1"`. Your app has to build against the same

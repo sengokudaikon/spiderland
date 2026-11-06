@@ -34,6 +34,7 @@
 //!     type Intent = Intent;
 //!     type Effect = Effect;
 //!     type Output = Never;
+//!     type Subscription = Never;
 //!
 //!     fn reduce(state: &mut State, intent: Intent, effects: &mut Effects<Effect>) {
 //!         match intent {
@@ -72,6 +73,10 @@
 //!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
 //!
+//! What runs for as long as the state wants it, such as a timer while a page shows, is a
+//! [`Subscription`](Feature::Subscription). The feature says which ones its state wants, the host starts each one, and the
+//! store stops the ones no longer wanted, whether or not a view is there to render.
+//!
 //! A host's work off the UI thread goes through [`Background`], and comes back as an intent. [`on_watch`] and [`on_wake`] let a
 //! service on another thread tell a feature that something changed. All of them run on an [`EventLoop`], the one thing they
 //! need from a toolkit, which a host crate such as `spiderland-slint` names once.
@@ -85,6 +90,8 @@
 //! - **Scope machinery.** A scope is a state inside a state: a parent's `reduce` hands the child its state, intent and
 //!   [`Effects::scoped`]. A scope that ends is an `Option` going back to `None`.
 
+#![cfg_attr(feature = "nightly", feature(associated_type_defaults))]
+
 mod background;
 mod lifecycle;
 mod macros;
@@ -97,7 +104,7 @@ mod wake;
 pub use background::{Background, EventLoop, Job};
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::Pulse;
-pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Seen, Step, Store, start, step};
+pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Seen, Step, Store, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};
 pub use wake::{Dropping, Listening, Waker, on_wake, on_watch};

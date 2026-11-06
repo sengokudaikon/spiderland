@@ -59,6 +59,7 @@ impl Feature for Probe {
     type Intent = Intent;
     type Effect = Never;
     type Output = Never;
+    type Subscription = Never;
 
     fn reduce(state: &mut State, intent: Intent, _: &mut Effects<Never>) {
         match intent {

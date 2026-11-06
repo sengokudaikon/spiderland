@@ -113,6 +113,7 @@ impl Feature for Field {
     type Intent = String;
     type Effect = ();
     type Output = Never;
+    type Subscription = Never;
 
     fn reduce(state: &mut FieldState, text: String, _: &mut Effects<()>) {
         if text.contains(|c: char| c.is_ascii_digit()) {

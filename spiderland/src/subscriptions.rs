@@ -2,9 +2,12 @@
 
 use std::any::Any;
 
-/// Running things by key. A render says which keys the state wants: new ones start, and ones no longer wanted are
-/// dropped, which is what stops them. Deriving this from state means leaving a page and coming back can't leave two
-/// timers running, as re-arming a timer from its own tick can.
+/// Running things by key. Each sync says which keys are wanted: new ones start, and ones no longer wanted are dropped, which
+/// is what stops them. Deriving this from state means leaving a page and coming back can't leave two timers running, as
+/// re-arming a timer from its own tick can.
+///
+/// A store keeps one for its feature's [`Subscription`](crate::Feature::Subscription)s, synced after each batch whether or not
+/// the host renders. A host can keep its own for what only it knows about, but what the state wants belongs to the feature.
 pub struct Subscriptions<K> {
     live: Vec<(K, Box<dyn Any>)>,
 }
@@ -18,12 +21,16 @@ impl<K> Default for Subscriptions<K> {
 impl<K: PartialEq> Subscriptions<K> {
     /// `start` returns a guard for what it started: dropping the guard must stop it.
     pub fn sync<G: 'static>(&mut self, wanted: impl IntoIterator<Item = K>, mut start: impl FnMut(&K) -> G) {
-        let wanted: Vec<K> = wanted.into_iter().collect();
+        self.sync_boxed(wanted.into_iter().collect(), |key| Box::new(start(key)));
+    }
+
+    /// [`Subscriptions::sync`] with guards already boxed, as [`Host::subscribe`](crate::Host::subscribe) returns them.
+    pub(crate) fn sync_boxed(&mut self, wanted: Vec<K>, mut start: impl FnMut(&K) -> Box<dyn Any>) {
         self.live.retain(|(key, _)| wanted.contains(key));
         for key in wanted {
             if !self.live.iter().any(|(live, _)| *live == key) {
                 let guard = start(&key);
-                self.live.push((key, Box::new(guard)));
+                self.live.push((key, guard));
             }
         }
     }

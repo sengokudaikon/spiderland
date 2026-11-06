@@ -2,8 +2,11 @@
 # Rust nightly is selected by rust-toolchain.toml.
 
 [tasks.lint]
-description = "Clippy over every target, warnings as errors"
-run = "cargo clippy --workspace --all-targets --offline -- -D warnings"
+description = "Clippy over every target, warnings as errors, and over spiderland's nightly feature"
+run = [
+    "cargo clippy --workspace --all-targets --offline -- -D warnings",
+    "cargo clippy -p spiderland --all-targets --features nightly --offline -- -D warnings",
+]
 
 [tasks.fmt]
 description = "Format the workspace"
@@ -14,8 +17,8 @@ description = "Fail if anything is unformatted"
 run = "cargo fmt --all --check"
 
 [tasks.test]
-description = "Every test of the workspace"
-run = "cargo test --workspace --offline"
+description = "Every test of the workspace, and spiderland's with its nightly feature"
+run = ["cargo test --workspace --offline", "cargo test -p spiderland --features nightly --offline"]
 
 [tasks.doc]
 description = "Build the docs, warnings as errors"

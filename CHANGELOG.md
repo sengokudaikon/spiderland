@@ -34,6 +34,10 @@ tag makes a GitHub release from that version's section.
   performed. The observer gets a reference, so nothing is copied and nothing needs `Debug`.
 - `spiderland`: `Intents::send_all` and `Store::send_all`, which send several intents as one batch. All of them are reduced before
   the render and the effects, so a snapshot and the answer that came with it are never shown or acted on apart.
+- `spiderland`: `Feature::Subscription`, `Feature::subscriptions` and `Host::subscribe`, so a feature says what runs while its state
+  wants it, and `subscriptions` to test that with no host. After each batch's render the store starts new keys and drops the ones
+  no longer wanted, whether or not the host rendered anything.
+- `spiderland`: a `nightly` feature, off by default, under which `type Subscription` defaults to `Never`.
 
 ### Changed
 
@@ -44,5 +48,7 @@ tag makes a GitHub release from that version's section.
   one thing from a toolkit, a way to run a future on the UI thread, and the new `EventLoop` trait names it. `spiderland-slint`
   keeps `Background`, `on_watch` and `on_wake` on its `Slint` loop, so those paths stay. Import `Job`, `Dropping`, `Listening`
   and `Waker` from `spiderland`. `spiderland` now depends on `tokio`'s channels, at the same pinned version.
+- **Breaking:** `Feature` requires `type Subscription`. On a nightly compiler, turn on `spiderland`'s `nightly` feature and change
+  nothing else. On stable, a feature that wants no subscriptions adds `type Subscription = Never;`.
 
 [Unreleased]: https://github.com/sengokudaikon/spiderland/commits/main
