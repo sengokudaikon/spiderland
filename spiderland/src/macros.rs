@@ -39,21 +39,94 @@
 ///
 /// `store` is anything with `clone` and `send`: a [`Store`](crate::Store), whose clones the view's callbacks then keep alive, or
 /// [`Intents`](crate::Intents), which don't. A callback that may send nothing, or that answers the view, is written out.
+///
+/// `view` and `store` are each evaluated once, so either can be an expression such as `ui.global::<Page>()` or
+/// `store.intents()`.
 #[macro_export]
 macro_rules! callbacks {
-    ($view:expr, $store:expr, {}) => {};
-    ($view:expr, $store:expr, { $on:ident: || $intent:expr $(, $($rest:tt)*)? }) => {
+    // One line at a time. `||` is one token, so one repeating arm can't take both closure forms.
+    (@lines $view:ident, $store:ident, {}) => {};
+    (@lines $view:ident, $store:ident, { $on:ident: || $intent:expr $(, $($rest:tt)*)? }) => {
         {
             let store = $store.clone();
             $view.$on(move || store.send($intent));
         }
-        $crate::callbacks!($view, $store, { $($($rest)*)? });
+        $crate::callbacks!(@lines $view, $store, { $($($rest)*)? });
     };
-    ($view:expr, $store:expr, { $on:ident: |$($arg:ident),+| $intent:expr $(, $($rest:tt)*)? }) => {
+    (@lines $view:ident, $store:ident, { $on:ident: |$($arg:ident),+| $intent:expr $(, $($rest:tt)*)? }) => {
         {
             let store = $store.clone();
             $view.$on(move |$($arg),+| store.send($intent));
         }
-        $crate::callbacks!($view, $store, { $($($rest)*)? });
+        $crate::callbacks!(@lines $view, $store, { $($($rest)*)? });
     };
+    ($view:expr, $store:expr, {}) => {};
+    ($view:expr, $store:expr, { $($lines:tt)* }) => {{
+        let view = &$view;
+        let store = &$store;
+        $crate::callbacks!(@lines view, store, { $($lines)* });
+    }};
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Effects, Feature, Host, Intents, Never, Store};
+    use std::cell::Cell;
+
+    struct Counter;
+
+    impl Feature for Counter {
+        type State = i32;
+        type Intent = i32;
+        type Effect = Never;
+        type Output = Never;
+        type Subscription = Never;
+
+        fn reduce(state: &mut i32, by: i32, _: &mut Effects<Never>) {
+            *state += by;
+        }
+    }
+
+    struct Quiet;
+
+    impl Host<Counter> for Quiet {
+        fn render(&mut self, _: &i32, _: &Intents<i32>) {}
+
+        fn perform(&mut self, effect: Never, _: &Intents<i32>) {
+            match effect {}
+        }
+    }
+
+    /// Calls each callback as soon as it is given one, as a view would on a click.
+    struct View;
+
+    impl View {
+        fn on_one(&self, mut callback: impl FnMut() + 'static) {
+            callback();
+        }
+
+        fn on_add(&self, mut callback: impl FnMut(i32, i32) + 'static) {
+            callback(2, 3);
+        }
+    }
+
+    #[test]
+    fn the_view_and_the_store_are_each_evaluated_once() {
+        let store = Store::new(0, Quiet);
+        let (views, senders) = (Cell::new(0), Cell::new(0));
+        let view = || {
+            views.set(views.get() + 1);
+            View
+        };
+        let intents = || {
+            senders.set(senders.get() + 1);
+            store.intents()
+        };
+        crate::callbacks!(view(), intents(), {
+            on_one: || 1,
+            on_add: |a, b| a + b,
+        });
+        assert_eq!((views.get(), senders.get()), (1, 1));
+        assert_eq!(store.try_read(|count| *count), Some(6), "both callbacks sent their intents");
+    }
 }

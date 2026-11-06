@@ -73,5 +73,7 @@ tag makes a GitHub release from that version's section.
   in English.
 - `spiderland-phrases-build`: `bundle_catalogs` no longer ignores a folder it can't read. It panics there, and warns when the
   `lang` folder doesn't exist.
+- `spiderland`: `callbacks!` evaluates its view and store expressions once. It used to evaluate them again for each line, so
+  an expression such as `ui.global::<Page>()` ran once per callback.
 
 [Unreleased]: https://github.com/sengokudaikon/spiderland/commits/main
