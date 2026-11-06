@@ -1,5 +1,7 @@
 //! What a Slint [`spiderland::Host`] needs to do its work, built on Slint's event loop.
 //!
+//! - [`WindowHost`] and [`Windowed`]: a host handed its window on each call. It isn't asked to render once the window is gone,
+//!   and still performs every effect.
 //! - [`Background`]: work off the UI thread whose result comes back as an intent, and waiting on the UI thread, for work that
 //!   can be let go of ([`Background::local`]) and for work that can't ([`Background::finish`]). It is
 //!   [`spiderland::Background`] on [`Slint`]'s loop.
@@ -13,8 +15,10 @@
 mod rows;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod window;
 
 pub use rows::{InnerRows, Rows};
+pub use window::{WindowHost, Windowed};
 
 use slint::{Timer, TimerMode};
 use spiderland::{EventLoop, Intents, Listening, Waker};

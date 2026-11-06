@@ -43,6 +43,7 @@
 | Item | What it does |
 |---|---|
 | `Slint` | Slint's event loop, as an `EventLoop`. |
+| `WindowHost`, `Windowed` | A host handed its window on each call. `render` isn't called once the window is gone, and `perform` always runs, with the window if it is still there. |
 | `Background`, `on_watch`, `on_wake` | `spiderland`'s, on Slint's event loop. |
 | `every` | Sends an intent repeatedly until its timer is dropped. |
 | `after` | Sends an intent once after a delay. Keep the timer in one place and it debounces. |

@@ -27,8 +27,10 @@ Put it next to the feature.
 
 Put it in the crate with the window.
 
+- Write it as a `WindowHost`, and run it through `Windowed`, which holds the window weakly. `render` gets the window, and isn't
+  called once the window is gone. `perform` always runs, and gets the window only if it is still there.
 - `callbacks!` maps view callbacks to intents, and does nothing else.
-- `render` runs each `Slice`, and syncs `Rows`. It does nothing else, so it can stop early when the window is gone.
+- `render` runs each `Slice`, and syncs `Rows`. It does nothing else, so skipping it once the window is gone loses nothing.
 - `perform` matches on the effect.
 - `subscribe` matches on the key, starts what it names, and returns its guard. The store drops the guard when the state stops
   wanting the key, whether or not `render` ran.

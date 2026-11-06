@@ -43,6 +43,9 @@ tag makes a GitHub release from that version's section.
   written as a plain statement is dropped at once and stops what it guards before it runs, so that now warns.
 - All crates: every public type implements `Debug`, and every public item has docs. `missing_docs` and
   `missing_debug_implementations` keep it so.
+- `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
+  gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
+  outcome is still heard.
 
 ### Changed
 
