@@ -72,6 +72,10 @@
 //!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
 //!
+//! A host's work off the UI thread goes through [`Background`], and comes back as an intent. [`on_watch`] and [`on_wake`] let a
+//! service on another thread tell a feature that something changed. All of them run on an [`EventLoop`], the one thing they
+//! need from a toolkit, which a host crate such as `spiderland-slint` names once.
+//!
 //! [`Store::observe`] shows each intent and effect as a store runs it, so an app can keep a trail of what led to a fault.
 //!
 //! What this leaves out on purpose:
@@ -81,15 +85,19 @@
 //! - **Scope machinery.** A scope is a state inside a state: a parent's `reduce` hands the child its state, intent and
 //!   [`Effects::scoped`]. A scope that ends is an `Option` going back to `None`.
 
+mod background;
 mod lifecycle;
 mod macros;
 mod pulse;
 mod store;
 mod subscriptions;
 mod tracked;
+mod wake;
 
+pub use background::{Background, EventLoop, Job};
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::Pulse;
 pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Seen, Step, Store, start, step};
 pub use subscriptions::Subscriptions;
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};
+pub use wake::{Dropping, Listening, Waker, on_wake, on_watch};

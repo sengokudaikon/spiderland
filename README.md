@@ -59,7 +59,7 @@ The `spiderland` crate docs add a `Host` and a `Store` to this.
 
 | Crate | What it is | Depends on |
 |---|---|---|
-| `spiderland` | One-way UI state | Nothing |
+| `spiderland` | One-way UI state | `tokio`'s channels |
 | `spiderland-slint` | What a Slint host needs | `spiderland`, `spiderland-phrases`, Slint, `tokio`'s channels |
 | `spiderland-phrases` | Words and numbers, ready for translation | Nothing but one Windows call |
 | `spiderland-phrases-build` | Build-time catalogs and the gettext template | `rspolib` |
@@ -77,7 +77,8 @@ spiderland = { git = "https://github.com/sengokudaikon/spiderland" }
 spiderland-slint = { git = "https://github.com/sengokudaikon/spiderland" }
 ```
 
-`spiderland-slint` pins `slint = "=1.18.1"` and `tokio = "=1.53.3"`. Your app has to build against the same versions.
+`spiderland` pins `tokio = "=1.53.3"`, and `spiderland-slint` also pins `slint = "=1.18.1"`. Your app has to build against the same
+versions.
 
 ## Docs
 

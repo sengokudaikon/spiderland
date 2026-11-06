@@ -19,6 +19,12 @@
 | `Slice::show`, `Input` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none can be left out. |
 | `CheckedSlice` | A `Slice` that fails a test build when its key misses an input. |
 | `Subscriptions` | Keep timers and watchers running for as long as the state wants them. |
+| `Background::run` | Runs work on the app's pool and sends the result back as an intent. A panic arrives as `Err(Panicked)`. |
+| `Background::wait` | Awaits an answer on the UI thread, with no pool thread held, and sends it back as an intent. |
+| `Background::local` | Awaits work on the UI thread that can be dropped at any moment, even from inside its own result. `Dropping` is its guard. |
+| `Background::finish` | Awaits work on the UI thread whose result must always be heard. |
+| `on_watch`, `on_wake` | Let a service on another thread tell a feature that something changed. `Listening` is their guard. |
+| `EventLoop` | The one thing `Background` and the listeners need from a toolkit: running a future on the UI thread. |
 | `Effects::scoped` | Runs a child scope's reducer inside its parent's. |
 | `step` | Runs one reducer step in a test, with no host, and returns its effects and outputs. |
 | `start` | Runs `Feature::start` in a test, with no host, and returns its effects. |
@@ -28,11 +34,8 @@
 
 | Item | What it does |
 |---|---|
-| `Background::run` | Runs work on the app's pool and sends the result back as an intent. A panic arrives as `Err(Panicked)`. |
-| `Background::wait` | Awaits an answer on the UI thread, with no pool thread held, and sends it back as an intent. |
-| `Background::local` | Awaits work on the UI thread that can be dropped at any moment, even from inside its own result. |
-| `Background::finish` | Awaits work on the UI thread whose result must always be heard. |
-| `on_watch`, `on_wake` | Let a service on another thread tell a feature that something changed. |
+| `Slint` | Slint's event loop, as an `EventLoop`. |
+| `Background`, `on_watch`, `on_wake` | `spiderland`'s, on Slint's event loop. |
 | `every` | Sends an intent repeatedly until its timer is dropped. |
 | `after` | Sends an intent once after a delay. Keep the timer in one place and it debounces. |
 | `Rows` | A list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. |

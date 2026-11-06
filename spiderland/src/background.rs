@@ -1,10 +1,20 @@
 //! Work that must not hold the UI thread. It runs on the app's pool and comes back on the event loop as an intent.
 
 use crate::wake::{Dropping, droppable};
-use spiderland::{Intents, Panicked};
+use crate::{Intents, Panicked};
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::oneshot;
+
+/// The loop that runs a UI thread's events, and futures between them. It is the one thing [`Background`] and the listeners
+/// need from a toolkit, and a host crate implements it once: `spiderland-slint`'s `Slint` hands each future to
+/// `slint::spawn_local`.
+pub trait EventLoop {
+    /// Runs `future` on the UI thread, between events. It is called from the UI thread. Where no event loop can ever run, it may
+    /// drop the future, since nothing could show the result anyway.
+    fn spawn_local(future: impl Future<Output = ()> + 'static);
+}
 
 /// One piece of work for the app's pool to start.
 pub type Job = Box<dyn FnOnce() + Send>;
@@ -29,29 +39,32 @@ impl Drop for Delivered {
     }
 }
 
-/// Starts work on the app's pool. Clone it into whatever hosts a feature.
-#[derive(Clone)]
-pub struct Background {
+/// Starts work on the app's pool, and waits on the UI thread run by `L`. Clone it into whatever hosts a feature.
+pub struct Background<L> {
     start: Arc<dyn Fn(Job) -> bool + Send + Sync>,
     /// Accepted work whose result hasn't been delivered yet.
     pending: Arc<AtomicUsize>,
+    event_loop: PhantomData<fn() -> L>,
 }
 
-impl Background {
+impl<L> Clone for Background<L> {
+    fn clone(&self) -> Self {
+        Background {
+            start: self.start.clone(),
+            pending: self.pending.clone(),
+            event_loop: PhantomData,
+        }
+    }
+}
+
+impl<L: EventLoop> Background<L> {
     /// `start` starts a job on the app's pool and says whether the pool took it. The app closes that pool on the way out, after
     /// cancelling anything long. A panic in a job goes on to the pool once the feature has been told, so the pool can keep a record.
-    ///
-    /// ```
-    /// let background = spiderland_slint::Background::new(|job| {
-    ///     std::thread::spawn(job);
-    ///     true
-    /// });
-    /// # drop(background);
-    /// ```
-    pub fn new(start: impl Fn(Job) -> bool + Send + Sync + 'static) -> Background {
+    pub fn new(start: impl Fn(Job) -> bool + Send + Sync + 'static) -> Background<L> {
         Background {
             start: Arc::new(start),
             pending: Arc::default(),
+            event_loop: PhantomData,
         }
     }
 
@@ -79,8 +92,7 @@ impl Background {
         }
         let delivered = self.accepted();
         let intents = intents.clone();
-        // Fails only where no event loop can ever run, and then nothing could show the result anyway.
-        let _ = slint::spawn_local(async move {
+        L::spawn_local(async move {
             let _delivered = delivered;
             // No reply: the pool let go of the job before it began.
             if let Ok(result) = replied.await {
@@ -99,8 +111,7 @@ impl Background {
     {
         let delivered = self.accepted();
         let intents = intents.clone();
-        // Fails only where no event loop can ever run, and then nothing could show the result anyway.
-        let _ = slint::spawn_local(async move {
+        L::spawn_local(async move {
             let _delivered = delivered;
             let result = work.await;
             intents.send(then(result));
@@ -112,8 +123,7 @@ impl Background {
     /// [`Background::local`]. Call it from the UI thread.
     pub fn finish<T: 'static>(&self, work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) {
         let delivered = self.accepted();
-        // Fails only where no event loop can ever run, and then nothing could show the result anyway.
-        let _ = slint::spawn_local(async move {
+        L::spawn_local(async move {
             let _delivered = delivered;
             then(work.await);
         });
@@ -124,7 +134,7 @@ impl Background {
     /// asks for may be to let go of this very work. Call it from the UI thread.
     pub fn local<T: 'static>(&self, work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) -> Dropping {
         let delivered = self.accepted();
-        droppable(work, move |result| {
+        droppable::<L, _>(work, move |result| {
             let _delivered = delivered;
             then(result);
         })

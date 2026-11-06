@@ -1,8 +1,8 @@
 //! Background work and timers against a real Slint event-loop proxy. One test: Slint's platform is set once per process.
 
-use spiderland::{Effects, Feature, Host, Intents, Never, Panicked, Store, Subscriptions};
+use spiderland::{Dropping, Effects, Feature, Host, Intents, Listening, Never, Panicked, Store, Subscriptions};
 use spiderland_slint::testing::{Headless, advance, settle, until};
-use spiderland_slint::{Background, Dropping, Listening, after, every, on_wake, on_watch};
+use spiderland_slint::{Background, after, every, on_wake, on_watch};
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
