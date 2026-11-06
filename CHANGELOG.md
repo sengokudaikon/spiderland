@@ -50,6 +50,10 @@ tag makes a GitHub release from that version's section.
   and `Waker` from `spiderland`. `spiderland` now depends on `tokio`'s channels, at the same pinned version.
 - **Breaking:** `Feature` requires `type Subscription`. On a nightly compiler, turn on `spiderland`'s `nightly` feature and change
   nothing else. On stable, a feature that wants no subscriptions adds `type Subscription = Never;`.
+- **Breaking:** `spiderland-slint`'s `select_language` returns `Result<(), spiderland_phrases::Error>`, and
+  `Translations::new` fails with `spiderland_phrases::Error` rather than a `String`. Handle the result where `select_language`
+  is called, for example with `expect`, beside a test that runs `Translations::new` on the same catalogs. `spiderland-phrases`
+  now depends on `thiserror`.
 
 ### Fixed
 
@@ -57,5 +61,9 @@ tag makes a GitHub release from that version's section.
   `#[cfg(test)]` line, so a `#[cfg(test)] mod x;` near the top hid every phrase below it from translators. It now leaves out only
   the item under that attribute. A comment or a string that mentions `Phrase::new` no longer counts, and escapes such as `\x41`
   read as Rust reads them. A template that lost phrases gains them back: run the task that writes it.
+- `spiderland-slint`: `select_language` no longer hides a catalog it can't read. It used to drop the error and show every language
+  in English.
+- `spiderland-phrases-build`: `bundle_catalogs` no longer ignores a folder it can't read. It panics there, and warns when the
+  `lang` folder doesn't exist.
 
 [Unreleased]: https://github.com/sengokudaikon/spiderland/commits/main

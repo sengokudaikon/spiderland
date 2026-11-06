@@ -1,20 +1,32 @@
 use std::fmt::Write;
+use std::io;
 use std::path::Path;
 
 /// For a build script: writes `pub static CATALOGS: &[spiderland_phrases::Catalog]` to `out` from each
 /// `<lang>/<language>/LC_MESSAGES/<domain>.po`, for the crate to `include!`, and returns the languages found. It reads them
 /// with the parser `slint-build` bundles translations with and takes the entries it takes, so an app's Rust phrases and its
-/// views agree on what is translated. Panics on what it cannot read or write, as a build script should.
+/// views agree on what is translated.
+///
+/// With no `lang` folder it bundles nothing and says so in a cargo warning, which an empty folder quiets. It panics on anything
+/// else it can't read or write, as a build script should.
 pub fn bundle_catalogs(lang: &Path, domain: &str, out: &Path) -> Vec<String> {
     println!("cargo:rerun-if-changed={}", lang.display());
     let file = format!("LC_MESSAGES/{domain}.po");
-    let mut languages: Vec<_> = std::fs::read_dir(lang)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().join(&file).is_file())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect();
+    let mut languages = Vec::new();
+    match std::fs::read_dir(lang) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.unwrap_or_else(|error| panic!("{}: {error}", lang.display()));
+                if entry.path().join(&file).is_file() {
+                    languages.push(entry.file_name().to_string_lossy().into_owned());
+                }
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            println!("cargo:warning=no translations are bundled: {} doesn't exist", lang.display());
+        }
+        Err(error) => panic!("{}: {error}", lang.display()),
+    }
     languages.sort();
     let mut table = String::from("pub static CATALOGS: &[spiderland_phrases::Catalog] = &[\n");
     for language in &languages {
@@ -92,5 +104,14 @@ msgstr ""
         let out = dir.path().join("table.rs");
         assert!(bundle_catalogs(&dir.path().join("lang"), "ui", &out).is_empty());
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "pub static CATALOGS: &[spiderland_phrases::Catalog] = &[\n];\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "lang")]
+    fn a_folder_it_cannot_read_stops_the_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let lang = dir.path().join("lang");
+        std::fs::write(&lang, "a file, not a folder").unwrap();
+        bundle_catalogs(&lang, "ui", &dir.path().join("table.rs"));
     }
 }

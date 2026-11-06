@@ -18,6 +18,22 @@ pub struct Catalog {
 /// The bundled catalogs, each plural rule parsed.
 pub struct Translations(Vec<&'static Language>);
 
+/// A bundled catalog that can't be used, because its plural rule can't be read.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the {language} catalog's plural rule {rule:?} can't be read: {reason}")]
+pub struct Error {
+    language: &'static str,
+    rule: &'static str,
+    reason: String,
+}
+
+impl Error {
+    /// The catalog's language, as its folder under `lang/` names it.
+    pub fn language(&self) -> &'static str {
+        self.language
+    }
+}
+
 pub(crate) struct Language {
     name: &'static str,
     rule: Rule,
@@ -31,12 +47,17 @@ pub(crate) fn current() -> Option<&'static Language> {
 }
 
 impl Translations {
-    /// Fails on a plural expression it cannot read.
-    pub fn new(catalogs: &'static [Catalog]) -> Result<Self, String> {
+    /// Fails when a catalog's plural rule can't be read. A test that builds this from the app's catalogs finds that before it
+    /// ships.
+    pub fn new(catalogs: &'static [Catalog]) -> Result<Self, Error> {
         catalogs
             .iter()
             .map(|catalog| {
-                let rule = Rule::parse(catalog.plural).map_err(|error| format!("{}: plural rule {:?}: {error}", catalog.language, catalog.plural))?;
+                let rule = Rule::parse(catalog.plural).map_err(|reason| Error {
+                    language: catalog.language,
+                    rule: catalog.plural,
+                    reason,
+                })?;
                 let entries = catalog.entries.iter().map(|(context, msgid, forms)| ((*context, *msgid), *forms)).collect();
                 // Once per catalog for the process's life, so its phrases can be `&'static`.
                 Ok(&*Box::leak(Box::new(Language {
@@ -115,6 +136,8 @@ mod tests {
             plural: "n !=",
             entries: &[],
         }];
-        assert!(Translations::new(&BROKEN).is_err());
+        let error = Translations::new(&BROKEN).err().expect("a plural rule that can't be read");
+        assert_eq!(error.language(), "xx");
+        assert!(error.to_string().starts_with(r#"the xx catalog's plural rule "n !=" can't be read: "#), "{error}");
     }
 }

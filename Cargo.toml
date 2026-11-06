@@ -21,6 +21,8 @@ syn = { version = "3.0.9", default-features = false }
 # The user's locale, read as Slint reads it to pick a bundled translation.
 sys-locale = "0.3.2"
 tempfile = "3.27.0"
+# A library's errors, as types a caller can match and print.
+thiserror = "2.0.21"
 windows-sys = "0.61.2"
 
 spiderland = { path = "spiderland" }

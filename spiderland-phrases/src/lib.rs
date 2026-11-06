@@ -18,5 +18,5 @@ mod macros;
 mod phrase;
 mod plural_rule;
 
-pub use catalog::{Catalog, Translations};
+pub use catalog::{Catalog, Error, Translations};
 pub use phrase::{Conjunction, Phrase, Plural, list};

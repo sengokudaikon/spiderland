@@ -52,7 +52,10 @@ Run `Template` from a task. `write` puts every word in one `.pot`, and `check` f
 ## Adding a translation
 
 1. Put it in `<lang>/<language>/LC_MESSAGES/<domain>.po`.
-2. In the build script, call `bundle_catalogs`. It writes the table for the Rust phrases and returns the languages it found.
+2. In the build script, call `bundle_catalogs`. It writes the table for the Rust phrases and returns the languages it found. With
+   no folder there it bundles none and warns; an empty folder bundles none quietly. It panics on a folder it can't read.
 3. Pass the same folder to `with_bundled_translations`, but only if there are any languages: Slint refuses a folder with none.
 4. Call `select_language` as soon as the first window exists, before any page or message is built. Views and phrases then show in
    the same language.
+5. Test that `Translations::new` takes your catalogs. `select_language` fails, and changes nothing, when a catalog's plural rule
+   can't be read.
