@@ -38,24 +38,26 @@
 /// ```
 ///
 /// `store` is anything with `clone` and `send`: a [`Store`](crate::Store), whose clones the view's callbacks then keep alive, or
-/// [`Intents`](crate::Intents), which don't. A callback that may send nothing, or that answers the view, is written out.
+/// [`Intents`](crate::Intents), which don't, or a reference to either. A callback that may send nothing, or that answers the view,
+/// is written out.
 ///
 /// `view` and `store` are each evaluated once, so either can be an expression such as `ui.global::<Page>()` or
 /// `store.intents()`.
 #[macro_export]
 macro_rules! callbacks {
-    // One line at a time. `||` is one token, so one repeating arm can't take both closure forms.
+    // One line at a time. `||` is one token, so one repeating arm can't take both closure forms. `$store` is a reference to what
+    // was passed, and `(*$store).clone()` clones that: a `Store` given by reference clones the store, not the reference.
     (@lines $view:ident, $store:ident, {}) => {};
     (@lines $view:ident, $store:ident, { $on:ident: || $intent:expr $(, $($rest:tt)*)? }) => {
         {
-            let store = $store.clone();
+            let store = (*$store).clone();
             $view.$on(move || store.send($intent));
         }
         $crate::callbacks!(@lines $view, $store, { $($($rest)*)? });
     };
     (@lines $view:ident, $store:ident, { $on:ident: |$($arg:ident),+| $intent:expr $(, $($rest:tt)*)? }) => {
         {
-            let store = $store.clone();
+            let store = (*$store).clone();
             $view.$on(move |$($arg),+| store.send($intent));
         }
         $crate::callbacks!(@lines $view, $store, { $($($rest)*)? });
@@ -128,5 +130,19 @@ mod tests {
         });
         assert_eq!((views.get(), senders.get()), (1, 1));
         assert_eq!(store.try_read(|count| *count), Some(6), "both callbacks sent their intents");
+    }
+
+    /// As a host's own function calls it, with the view and the store borrowed.
+    fn connect(view: &View, store: &Store<Counter>, intents: &Intents<i32>) {
+        crate::callbacks!(view, store, { on_one: || 1 });
+        crate::callbacks!(view, intents, { on_add: |a, b| a + b });
+    }
+
+    #[test]
+    fn a_borrowed_store_or_intents_is_cloned_not_the_reference() {
+        let store = Store::new(0, Quiet);
+        // Fails to build if a callback keeps the reference, which doesn't live as long as the view's `'static` callbacks.
+        connect(&View, &store, &store.intents());
+        assert_eq!(store.try_read(|count| *count), Some(6));
     }
 }
