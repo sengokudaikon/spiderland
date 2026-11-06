@@ -83,6 +83,20 @@ msgstr "Entf"
 
 msgid "Not done"
 msgstr ""
+
+msgid "{n} file"
+msgid_plural "{n} files"
+msgstr[0] "{n} Datei"
+msgstr[1] "{n} Dateien"
+
+msgid "{n} folder"
+msgid_plural "{n} folders"
+msgstr[0] "{n} Ordner"
+msgstr[1] ""
+
+#, fuzzy
+msgid "Undo"
+msgstr "Rückgängig"
 "#,
         )
         .unwrap();
@@ -95,7 +109,10 @@ msgstr ""
         );
         assert!(table.contains(r#"(None, "Delete", &["Löschen"]),"#), "{table}");
         assert!(table.contains(r#"(Some("key"), "Delete", &["Entf"]),"#), "{table}");
+        assert!(table.contains(r#"(None, "{n} file", &["{n} Datei", "{n} Dateien"]),"#), "{table}");
         assert!(!table.contains("Not done"), "{table}");
+        assert!(!table.contains("{n} folder"), "a plural with a form missing is not finished: {table}");
+        assert!(!table.contains("Undo"), "a fuzzy entry is not finished: {table}");
     }
 
     #[test]
