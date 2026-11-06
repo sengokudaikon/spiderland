@@ -38,6 +38,7 @@ tag makes a GitHub release from that version's section.
   wants it, and `subscriptions` to test that with no host. After each batch's render the store starts new keys and drops the ones
   no longer wanted, whether or not the host rendered anything.
 - `spiderland`: a `nightly` feature, off by default, under which `type Subscription` defaults to `Never`.
+- `spiderland`: `Panicked` implements `Display` and `std::error::Error`, so `?` carries it into an app's own error.
 
 ### Changed
 

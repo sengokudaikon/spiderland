@@ -4,6 +4,7 @@ use crate::Subscriptions;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::fmt;
 use std::rc::{Rc, Weak};
 
 /// A feature's pure half. `reduce` touches nothing but its arguments, so it can be tested without a window or a worker.
@@ -125,9 +126,18 @@ pub fn subscriptions<F: Feature>(state: &F::State) -> Vec<F::Subscription> {
 }
 
 /// Background work panicked. Finished work hands this to its feature, which decides what the failure means there: a
-/// fault in one feature's work is not automatically a fault in the app.
+/// fault in one feature's work is not automatically a fault in the app. It is a [`std::error::Error`], so `?` carries it into
+/// an app's own error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Panicked;
+
+impl fmt::Display for Panicked {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("background work panicked")
+    }
+}
+
+impl std::error::Error for Panicked {}
 
 /// A feature's impure half: the view, the timers and the services.
 pub trait Host<F: Feature>: 'static {
@@ -1274,5 +1284,13 @@ mod tests {
         drop(to);
         from.send(TalkerIntent::Say("gone"));
         assert_eq!(Rc::strong_count(&held), 1, "the forward ended with the store behind the mapped sender");
+    }
+
+    #[test]
+    fn a_panic_goes_into_an_apps_error_with_question_mark() {
+        fn finish(result: Result<i32, Panicked>) -> Result<i32, Box<dyn std::error::Error>> {
+            Ok(result?)
+        }
+        assert_eq!(finish(Err(Panicked)).unwrap_err().to_string(), "background work panicked");
     }
 }

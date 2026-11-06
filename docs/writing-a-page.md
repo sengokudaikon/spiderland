@@ -56,8 +56,9 @@ its store is gone. Never tie a write to a scope that can close first.
 
 **Panics**
 
-A panic in background work arrives as `Err(Panicked)`, and each feature decides what it means. The panic then goes on to the app's
-pool, which can keep a record of it.
+A panic in background work arrives as `Err(Panicked)`, and each feature decides what it means. `Panicked` is a
+`std::error::Error`, so `?` carries it into an app's own error. The panic then goes on to the app's pool, which can keep a record
+of it.
 
 **Slice keys**
 
