@@ -68,7 +68,9 @@ pub enum Error {
 }
 
 /// One template and where its words come from. Paths are relative to `root`, and are how the template refers to files.
+#[derive(Debug)]
 pub struct Template<'a> {
+    /// The folder every other path starts from, usually the workspace's.
     pub root: &'a Path,
     /// The file to write.
     pub path: &'a str,

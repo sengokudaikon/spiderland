@@ -1,6 +1,7 @@
 //! Things that run for as long as the state wants them, such as a timer while a page shows.
 
 use std::any::Any;
+use std::fmt;
 
 /// Running things by key. Each sync says which keys are wanted: new ones start, and ones no longer wanted are dropped, which
 /// is what stops them. Deriving this from state means leaving a page and coming back can't leave two timers running, as
@@ -10,6 +11,12 @@ use std::any::Any;
 /// the host renders. A host can keep its own for what only it knows about, but what the state wants belongs to the feature.
 pub struct Subscriptions<K> {
     live: Vec<(K, Box<dyn Any>)>,
+}
+
+impl<K: fmt::Debug> fmt::Debug for Subscriptions<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Subscriptions").field(&self.live.iter().map(|(key, _)| key).collect::<Vec<_>>()).finish()
+    }
 }
 
 impl<K> Default for Subscriptions<K> {

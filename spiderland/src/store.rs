@@ -26,6 +26,8 @@ pub trait Feature: 'static {
     #[cfg(not(feature = "nightly"))]
     type Subscription: PartialEq + 'static;
 
+    /// Handles one intent: changes `state`, and lists in `effects` the work to do and what to tell others. It touches nothing
+    /// else, so [`step`] can test it with no host.
     fn reduce(state: &mut Self::State, intent: Self::Intent, effects: &mut Effects<Self::Effect, Self::Output>);
 
     /// Runs once as the store is built, before the first render. The effects it asks for are performed after that render. It can't
@@ -47,6 +49,7 @@ pub trait Feature: 'static {
 pub enum Never {}
 
 /// What one `reduce` asks for. After the next render its effects are performed in order, and then its outputs go out in order.
+#[derive(Debug)]
 pub struct Effects<E, O = Never> {
     effects: Vec<E>,
     outputs: Vec<O>,
@@ -61,6 +64,7 @@ impl<E, O> Effects<E, O> {
         }
     }
 
+    /// Asks for `effect`, which the host performs after the next render.
     pub fn push(&mut self, effect: E) {
         self.effects.push(effect);
     }
@@ -83,7 +87,9 @@ impl<E, O> Effects<E, O> {
 /// What one reducer step asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Step<E, O = Never> {
+    /// The effects it asked for, in order.
     pub effects: Vec<E>,
+    /// What it emitted, in order.
     pub outputs: Vec<O>,
 }
 
@@ -102,6 +108,19 @@ impl<F: Feature> Clone for Seen<'_, F> {
 }
 
 impl<F: Feature> Copy for Seen<'_, F> {}
+
+impl<F: Feature> fmt::Debug for Seen<'_, F>
+where
+    F::Intent: fmt::Debug,
+    F::Effect: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Seen::Intent(intent) => f.debug_tuple("Intent").field(intent).finish(),
+            Seen::Effect(effect) => f.debug_tuple("Effect").field(effect).finish(),
+        }
+    }
+}
 
 /// One reducer step, for tests: changes `state` and returns what `intent` asked for.
 pub fn step<F: Feature>(state: &mut F::State, intent: F::Intent) -> Step<F::Effect, F::Output> {
@@ -213,7 +232,14 @@ impl<I> Clone for Intents<I> {
     }
 }
 
+impl<I> fmt::Debug for Intents<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Intents").field("alive", &self.is_alive()).finish()
+    }
+}
+
 impl<I> Intents<I> {
+    /// Sends `intent` to the store, which runs it as [`Store::send`] does. Once the store is gone, it does nothing.
     pub fn send(&self, intent: I) {
         self.0.send(intent);
     }
@@ -272,6 +298,12 @@ impl<F: Feature> Clone for Store<F> {
     }
 }
 
+impl<F: Feature> fmt::Debug for Store<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Store").field(&format_args!("{}", std::any::type_name::<F>())).finish()
+    }
+}
+
 impl<F: Feature> Store<F> {
     /// Starts the store: runs [`Feature::start`], renders the first state and performs the effects `start` asked for. An intent
     /// sent from any of that runs right after it.
@@ -314,6 +346,7 @@ impl<F: Feature> Store<F> {
         if queued { None } else { self.try_read(read) }
     }
 
+    /// A sender of this store's intents, for a view's callbacks, a timer or a worker. It doesn't keep the store alive.
     pub fn intents(&self) -> Intents<F::Intent> {
         self.0.intents.clone()
     }

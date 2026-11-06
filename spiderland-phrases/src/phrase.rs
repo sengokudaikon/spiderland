@@ -4,6 +4,8 @@ use crate::catalog::current;
 use crate::phrases;
 use std::fmt;
 
+/// A piece of English the user reads, shown in their language once a translation has it. The template finds it in the code
+/// by its literal, so `english` must be one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Phrase {
     context: Option<&'static str>,
@@ -11,6 +13,7 @@ pub struct Phrase {
 }
 
 impl Phrase {
+    /// `english`, for translators to translate.
     pub const fn new(english: &'static str) -> Self {
         Self { context: None, english }
     }
@@ -52,6 +55,7 @@ pub struct Plural {
 }
 
 impl Plural {
+    /// English's two forms: `one` for a count of one, `other` for any other.
     pub const fn new(one: &'static str, other: &'static str) -> Self {
         Self { one, other }
     }
@@ -76,9 +80,12 @@ impl Plural {
     }
 }
 
+/// The word before a [`list`]'s last item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Conjunction {
+    /// "a, b and c": all of them.
     And,
+    /// "a, b or c": one of them.
     Or,
 }
 

@@ -2,10 +2,12 @@
 
 use crate::plural_rule::Rule;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::RwLock;
 
 /// One language's translations as an app's build script bundles them, with what made it in: entries the
 /// translator finished (not fuzzy, every form filled), as Slint takes them for the views.
+#[derive(Debug)]
 pub struct Catalog {
     /// As its folder under `lang/` names it, e.g. "de" or "pt-BR".
     pub language: &'static str,
@@ -17,6 +19,14 @@ pub struct Catalog {
 
 /// The bundled catalogs, each plural rule parsed.
 pub struct Translations(Vec<&'static Language>);
+
+impl fmt::Debug for Translations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Translations")
+            .field(&self.0.iter().map(|language| language.name).collect::<Vec<_>>())
+            .finish()
+    }
+}
 
 /// A bundled catalog that can't be used, because its plural rule can't be read.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -136,7 +146,7 @@ mod tests {
             plural: "n !=",
             entries: &[],
         }];
-        let error = Translations::new(&BROKEN).err().expect("a plural rule that can't be read");
+        let error = Translations::new(&BROKEN).expect_err("a plural rule that can't be read");
         assert_eq!(error.language(), "xx");
         assert!(error.to_string().starts_with(r#"the xx catalog's plural rule "n !=" can't be read: "#), "{error}");
     }

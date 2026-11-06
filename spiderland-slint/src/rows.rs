@@ -2,6 +2,7 @@
 
 use slint::{Model, ModelRc, VecModel};
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -16,6 +17,12 @@ use std::rc::Rc;
 /// in place stays old on screen. Two renders with no paint between them are enough. [`InnerRows`] avoids both.
 pub struct Rows<T: 'static>(Rc<VecModel<T>>);
 
+impl<T: Clone + 'static> fmt::Debug for Rows<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Rows").field("len", &self.0.row_count()).finish()
+    }
+}
+
 impl<T: 'static> Default for Rows<T> {
     fn default() -> Self {
         Rows(Rc::new(VecModel::default()))
@@ -28,6 +35,8 @@ impl<T: Clone + PartialEq + 'static> Rows<T> {
         ModelRc::from(self.0.clone())
     }
 
+    /// Makes the model hold `rows`, by position: a row at a place both lists have is updated in place if it differs, and the
+    /// rest come or go at the end.
     pub fn sync(&self, rows: impl IntoIterator<Item = T>) {
         self.update(rows);
     }
@@ -104,6 +113,12 @@ impl<T: Clone + PartialEq + 'static> Rows<T> {
 /// change reaches the view without the outer row counting as changed, and without losing the change to the Slint bug described on
 /// [`Rows`]. Under an outer list that moves rows, a row gets the model of the position it lands on, with the right contents.
 pub struct InnerRows<T: 'static>(Vec<Rows<T>>);
+
+impl<T: Clone + 'static> fmt::Debug for InnerRows<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("InnerRows").field(&self.0).finish()
+    }
+}
 
 impl<T: 'static> Default for InnerRows<T> {
     fn default() -> Self {

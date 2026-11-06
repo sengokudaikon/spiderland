@@ -89,7 +89,9 @@
 /// What a parent tells a child about its place on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lifecycle {
+    /// The child is on screen.
     Shown,
+    /// The child is off screen. Its store goes on running, and what to pause is up to the child.
     Hidden,
     /// The window wants to close. A child answers with a [`CloseAnswer`], after finishing whatever has to finish first.
     CloseRequested,

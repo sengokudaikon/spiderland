@@ -56,6 +56,7 @@ pub fn on_wake<I: 'static>(intents: &Intents<I>, make: impl Fn() -> I + 'static)
 }
 
 /// Sends `make()` every `interval` until the returned timer is dropped.
+#[must_use = "dropping the timer stops it"]
 pub fn every<I: 'static>(interval: Duration, intents: &Intents<I>, make: impl Fn() -> I + 'static) -> Timer {
     let timer = Timer::default();
     let intents = intents.clone();
@@ -65,6 +66,7 @@ pub fn every<I: 'static>(interval: Duration, intents: &Intents<I>, make: impl Fn
 
 /// Sends `make()` once, after `delay`, unless the returned timer is dropped first. Keeping the timer in one place makes this a
 /// debounce: the next call's timer replaces it, and only the last one fires.
+#[must_use = "dropping the timer stops it"]
 pub fn after<I: 'static>(delay: Duration, intents: &Intents<I>, make: impl Fn() -> I + 'static) -> Timer {
     let timer = Timer::default();
     let intents = intents.clone();

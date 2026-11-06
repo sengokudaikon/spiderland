@@ -2,6 +2,7 @@
 
 use crate::wake::{Dropping, droppable};
 use crate::{Intents, Panicked};
+use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -45,6 +46,12 @@ pub struct Background<L> {
     /// Accepted work whose result hasn't been delivered yet.
     pending: Arc<AtomicUsize>,
     event_loop: PhantomData<fn() -> L>,
+}
+
+impl<L> fmt::Debug for Background<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Background").field("pending", &self.pending.load(Ordering::Acquire)).finish_non_exhaustive()
+    }
 }
 
 impl<L> Clone for Background<L> {

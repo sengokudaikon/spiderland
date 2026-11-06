@@ -31,10 +31,12 @@ impl<T: Default> Default for Tracked<T> {
 }
 
 impl<T> Tracked<T> {
+    /// `value`, with a version no other value has had.
     pub fn new(value: T) -> Self {
         Tracked { value, version: Version::next() }
     }
 
+    /// The version of what it holds now, for a [`Slice`] key.
     pub fn version(&self) -> Version {
         self.version
     }
@@ -157,8 +159,10 @@ impl<K: PartialEq> Slice<K> {
 /// A reference is always `Copy`, so a reference to a `PartialEq` type already gives itself, and this impl would clash with that
 /// one. For such a type, implement it on a wrapper of your own.
 pub trait Input {
+    /// What changes whenever the input could have.
     type Key: PartialEq;
 
+    /// The key of the input as it is now.
     fn key(&self) -> Self::Key;
 }
 
@@ -181,11 +185,15 @@ impl<T: Copy + PartialEq> Input for T {
 
 /// What a [`Slice::show`] reads: one [`Tracked`], or a tuple of up to six [`Input`]s. `Make` is the `fn` that takes them.
 pub trait Inputs {
+    /// The inputs' keys together.
     type Key: PartialEq;
+    /// A plain `fn` that takes the inputs and makes a `V`.
     type Make<V>;
 
+    /// The key of the inputs as they are now.
     fn key(&self) -> Self::Key;
 
+    /// Hands the inputs to `make`.
     fn make<V>(self, make: Self::Make<V>) -> V;
 }
 
@@ -243,6 +251,7 @@ inputs!(A 0, B 1, C 2, D 3, E 4, F 5);
 /// A [`Slice`] that makes a value before showing it, and so can check itself. In a test build, whenever the key says nothing
 /// changed it makes the value anyway and panics if it differs from what is showing: a key missing an input fails there
 /// rather than showing stale values in a release, where the value is only made when the key changes.
+#[derive(Debug)]
 pub struct CheckedSlice<K, V> {
     key: Option<K>,
     #[cfg(debug_assertions)]

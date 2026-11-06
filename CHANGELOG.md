@@ -39,6 +39,10 @@ tag makes a GitHub release from that version's section.
   no longer wanted, whether or not the host rendered anything.
 - `spiderland`: a `nightly` feature, off by default, under which `type Subscription` defaults to `Never`.
 - `spiderland`: `Panicked` implements `Display` and `std::error::Error`, so `?` carries it into an app's own error.
+- `Dropping`, `Listening`, and the timers `every` and `after` return, are `#[must_use]`. A guard written as a plain statement is
+  dropped at once and stops what it guards before it runs, so that now warns.
+- Every public type implements `Debug`, and every public item has docs. `missing_docs` and `missing_debug_implementations` keep
+  it so.
 
 ### Changed
 

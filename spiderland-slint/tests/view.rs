@@ -1,6 +1,8 @@
 //! What one-way state does across a real view: the rules in `docs/writing-a-page.md`, `Pulse`, and `Rows` under focus and on screen.
 //! One test: Slint's platform is set once per process.
 
+#![allow(missing_docs, reason = "`slint!` makes the view's types public, with no docs")]
+
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Weak};
 use spiderland::{Effects, Feature, Host, Intents, Never, Pulse, Store};
 use spiderland_slint::testing::{Headless, settle};

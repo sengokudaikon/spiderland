@@ -30,6 +30,8 @@ spiderland-phrases = { path = "spiderland-phrases" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -38,6 +38,7 @@ use slint::platform::{Clipboard, EventLoopProxy, Key, Platform, PointerEventButt
 use slint::{EventLoopError, LogicalPosition, PhysicalSize, PlatformError, SharedString};
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::fmt;
 use std::rc::{Rc, Weak};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -104,7 +105,14 @@ impl Platform for HeadlessPlatform {
 
 /// The process's one window, and real input to it. Every action ends with a [`settle`].
 pub struct Headless {
+    /// The window every component shows in, for events this has no method for.
     pub window: Rc<MinimalSoftwareWindow>,
+}
+
+impl fmt::Debug for Headless {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Headless").field("size", &self.window.size()).finish_non_exhaustive()
+    }
 }
 
 impl Headless {
@@ -125,6 +133,7 @@ impl Headless {
         Headless { window }
     }
 
+    /// A left click at `x`, `y`, in logical pixels.
     pub fn click(&self, x: f32, y: f32) {
         let position = LogicalPosition::new(x, y);
         let button = PointerEventButton::Left;
@@ -134,6 +143,7 @@ impl Headless {
         settle();
     }
 
+    /// A scroll of `delta_y` logical pixels with the pointer at `x`, `y`.
     pub fn scroll(&self, x: f32, y: f32, delta_y: f32) {
         let position = LogicalPosition::new(x, y);
         self.window.dispatch_event(WindowEvent::PointerMoved { position });
@@ -141,6 +151,7 @@ impl Headless {
         settle();
     }
 
+    /// Types `text`, one key per character.
     pub fn type_text(&self, text: &str) {
         for c in text.chars() {
             let text = SharedString::from(c.to_string());
@@ -159,6 +170,7 @@ impl Headless {
         settle();
     }
 
+    /// Presses and releases `key`.
     pub fn key(&self, key: Key) {
         let text = SharedString::from(key);
         self.window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
@@ -166,6 +178,7 @@ impl Headless {
         settle();
     }
 
+    /// Resizes the window to `width` by `height` physical pixels.
     pub fn resize(&self, width: u32, height: u32) {
         self.window.set_size(PhysicalSize::new(width, height));
         settle();

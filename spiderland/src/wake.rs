@@ -10,19 +10,23 @@ use tokio::sync::{Notify, oneshot, watch};
 
 /// Fires from any thread. A burst of fires makes at most two intents, the one under way and one more, however long it is.
 /// Each intent should read the latest state, so nothing is lost and nothing piles up.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Waker(Arc<Notify>);
 
 impl Waker {
+    /// Asks for one more intent. It never blocks, and it does nothing once the listener has stopped.
     pub fn wake(&self) {
         self.0.notify_one();
     }
 }
 
 /// Drops the work given to [`Background::local`](crate::Background::local) when dropped, if it hasn't finished.
+#[derive(Debug)]
+#[must_use = "dropping it drops the work at once"]
 pub struct Dropping(oneshot::Sender<()>);
 
 impl Dropping {
+    /// True once the work is over: it finished, or the event loop let go of it.
     pub fn is_finished(&self) -> bool {
         self.0.is_closed()
     }
@@ -53,6 +57,8 @@ pub(crate) fn droppable<L: EventLoop, T: 'static>(work: impl Future<Output = T> 
 /// Stops listening when dropped, so it can be a guard for [`Subscriptions`](crate::Subscriptions). That is safe from inside
 /// the intent the listener itself sent: nothing is sent after that, and what the listener holds is let go of on the next turn
 /// of the event loop, with no need for anything further to be published.
+#[derive(Debug)]
+#[must_use = "dropping it stops listening at once"]
 pub struct Listening {
     _work: Dropping,
     _wanted: Rc<()>,

@@ -30,6 +30,7 @@ impl<T> Pulse<T> {
         self.serial = self.serial.wrapping_add(1);
     }
 
+    /// The value of the latest fire, or the one given to [`Pulse::new`] before any.
     pub fn value(&self) -> &T {
         &self.value
     }

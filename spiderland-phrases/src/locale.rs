@@ -4,11 +4,16 @@
 use std::io;
 use std::sync::{LazyLock, RwLock};
 
+/// What a language writes numbers with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NumberSymbols {
+    /// Between the whole part and the fraction: "." in English.
     pub decimal: String,
+    /// Between groups of thousands: "," in English.
     pub group: String,
+    /// Before a number above zero, when it shows a sign.
     pub positive: String,
+    /// Before a number below zero.
     pub negative: String,
 }
 
@@ -41,6 +46,8 @@ impl NumberSymbols {
         }
     }
 
+    /// `language`'s symbols, as Windows has them for that locale name, such as "de" or "pt-BR". The user's own overrides are
+    /// left out. Fails for a name Windows doesn't know, and always off Windows.
     #[cfg(windows)]
     pub fn capture(language: &str) -> io::Result<Self> {
         use windows_sys::Win32::Globalization::{GetLocaleInfoEx, LOCALE_NOUSEROVERRIDE, LOCALE_SDECIMAL, LOCALE_SNEGATIVESIGN, LOCALE_SPOSITIVESIGN, LOCALE_STHOUSAND};
@@ -68,6 +75,8 @@ impl NumberSymbols {
             negative: read(LOCALE_SNEGATIVESIGN)?,
         })
     }
+
+    /// `language`'s symbols, as Windows has them for that locale name. Off Windows there are none, so it always fails.
     #[cfg(not(windows))]
     pub fn capture(_: &str) -> io::Result<Self> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "Windows numeric locales are unavailable"))
