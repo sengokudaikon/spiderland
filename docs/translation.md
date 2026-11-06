@@ -45,6 +45,7 @@ Both sides have to leave it off, or the same English becomes two entries:
 
 Run `Template` from a task. `write` puts every word in one `.pot`, and `check` fails if that file is out of date.
 
+- It collects only the app's sources: the framework has no words of its own.
 - References name files only, so moving code doesn't make the template stale.
 - The header has no date, so a check compares the file as written.
 - Keep `slint-tr-extractor` at the version of Slint your views build with.

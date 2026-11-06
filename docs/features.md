@@ -60,7 +60,6 @@
 | `phrases!` | Declares words by name, beside the code that uses them. |
 | `Phrase` | One piece of text. `Phrase::with` fills in named values. |
 | `Plural` | A count's forms. `{n}` picks the form. |
-| `list` | Joins items as the language joins them. |
 | `Translations` | Checks the bundled catalogs and selects the language shown. |
 | `locale` | Number symbols for the language shown. |
 

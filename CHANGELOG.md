@@ -16,7 +16,7 @@ tag makes a GitHub release from that version's section.
 - `spiderland`: `Feature`, `Host` and `Store` for one-way UI state, with `Tracked`, `Slice`, `CheckedSlice`, `Subscriptions`, `step`
   and `callbacks!`.
 - `spiderland-slint`: `Background`, `every`, `after`, `on_watch`, `on_wake`, `Rows`, `select_language` and `testing`.
-- `spiderland-phrases`: `phrases!`, `Phrase`, `Plural`, `list`, `Translations` and `locale`.
+- `spiderland-phrases`: `phrases!`, `Phrase`, `Plural`, `Translations` and `locale`.
 - `spiderland-phrases-build`: `bundle_catalogs` and `Template`.
 - `spiderland`: `Feature::Output`, `Effects::emit` and `Store::forward`, so a feature can tell others something. An output goes out
   after its batch's render and effects, and one emitted before there is a listener reaches no one.
@@ -65,6 +65,12 @@ tag makes a GitHub release from that version's section.
 - **Breaking:** `spiderland-phrases-build`'s `Template::check` and `Template::write` fail with `spiderland_phrases_build::Error`
   rather than a `String`. Its cases say which file and what went wrong, and it is `#[non_exhaustive]`. Where a caller joins it
   with `String` errors, add `.map_err(|error| error.to_string())` to the call.
+
+### Removed
+
+- **Breaking:** `spiderland-phrases`: `list` and `Conjunction`, the only words the framework shipped. An app's template now
+  collects only the app's own sources. An app that joins lists writes that itself, and keeps the translations it has by giving
+  its phrases the same English and contexts.
 
 ### Fixed
 

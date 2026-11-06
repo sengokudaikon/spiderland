@@ -1,7 +1,6 @@
-//! A phrase, a plural and a list as the code holds them, each filled in and shown in the user's language.
+//! A phrase and a plural as the code holds them, each filled in and shown in the user's language.
 
 use crate::catalog::current;
-use crate::phrases;
 use std::fmt;
 
 /// A piece of English the user reads, shown in their language once a translation has it. The template finds it in the code
@@ -80,40 +79,6 @@ impl Plural {
     }
 }
 
-/// The word before a [`list`]'s last item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Conjunction {
-    /// "a, b and c": all of them.
-    And,
-    /// "a, b or c": one of them.
-    Or,
-}
-
-/// Items as a list in the user's language: "a", "a and b", "a, b and c". Each joint is a phrase of its own, so a
-/// translation chooses its separator and where the conjunction goes.
-pub fn list<T: fmt::Display>(items: &[T], conjunction: Conjunction) -> String {
-    phrases! {
-        AndTwo: "a list of two" => "{first} and {second}"
-        OrTwo: "a list of two" => "{first} or {second}"
-        More: "a longer list, before its last item" => "{list}, {item}"
-        AndLast: "a longer list, its last item" => "{list} and {last}"
-        OrLast: "a longer list, its last item" => "{list} or {last}"
-    }
-    let (two, last) = match conjunction {
-        Conjunction::And => (AndTwo, AndLast),
-        Conjunction::Or => (OrTwo, OrLast),
-    };
-    match items {
-        [] => String::new(),
-        [one] => one.to_string(),
-        [first, second] => two.with(&[("first", first), ("second", second)]),
-        [first, middle @ .., end] => {
-            let list = middle.iter().fold(first.to_string(), |list, item| More.with(&[("list", &list), ("item", item)]));
-            last.with(&[("list", &list), ("last", end)])
-        }
-    }
-}
-
 fn fill(text: &str, values: &[(&str, &dyn fmt::Display)]) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -138,6 +103,7 @@ fn fill(text: &str, values: &[(&str, &dyn fmt::Display)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::phrases;
 
     #[test]
     fn values_fill_their_names_and_nothing_else() {
@@ -148,14 +114,10 @@ mod tests {
     }
 
     #[test]
-    fn english_counts_and_lists() {
+    fn english_counts() {
         phrases! { Files: "{n} file" | "{n} files" }
         assert_eq!([Files.count(0), Files.count(1), Files.count(2)], ["0 files", "1 file", "2 files"]);
         assert_eq!(Plural::new("{n} file in {place}", "{n} files in {place}").with(3, &[("place", &"Logs")]), "3 files in Logs");
-        assert_eq!(list::<&str>(&[], Conjunction::And), "");
-        assert_eq!(list(&["a"], Conjunction::And), "a");
-        assert_eq!(list(&["a", "b"], Conjunction::Or), "a or b");
-        assert_eq!(list(&["a", "b", "c", "d"], Conjunction::And), "a, b, c and d");
     }
 
     #[test]
