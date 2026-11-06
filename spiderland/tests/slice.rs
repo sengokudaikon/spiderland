@@ -57,10 +57,7 @@ fn render(slice: &mut Slice<(Version, u64, Gates)>, history: &Tracked<Vec<Entry>
 #[test]
 fn a_region_is_made_again_only_when_what_it_reads_changes() {
     let mut history = Tracked::new(vec![Entry { name: "a", undone: false }]);
-    let mut game = Game {
-        generation: 1,
-        can_write: true,
-    };
+    let mut game = Game { generation: 1, can_write: true };
     let mut gates = Gates { can_mutate: true };
     let mut slice = Slice::default();
 
@@ -70,10 +67,7 @@ fn a_region_is_made_again_only_when_what_it_reads_changes() {
     history.push(Entry { name: "b", undone: true });
     assert_eq!(render(&mut slice, &history, &game, gates), Some(vec![row("a", true), row("b", false)]));
 
-    game = Game {
-        generation: 2,
-        can_write: false,
-    };
+    game = Game { generation: 2, can_write: false };
     assert_eq!(render(&mut slice, &history, &game, gates), Some(vec![row("a", false), row("b", false)]));
 
     game.can_write = true;
