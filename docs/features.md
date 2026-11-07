@@ -36,6 +36,7 @@
 | `step`, `Step` | Runs one reducer step in a test, with no host, and returns its effects and outputs. |
 | `start` | Runs `Feature::start` in a test, with no host, and returns its effects. |
 | `subscriptions` | Lists what a state wants running, in a test, with no host. |
+| `TestStore` | Runs the whole loop in a test. Each effect waits for the test to take it or answer it, and one left waiting fails the test. |
 | `callbacks!` | Maps a view's callbacks to intents, one per line. |
 
 ## Slint host: `spiderland-slint`

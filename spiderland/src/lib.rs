@@ -71,6 +71,9 @@
 //! assert_eq!(shown.get(), (2, 1));
 //! ```
 //!
+//! A flow across effects is tested with [`TestStore`]: the whole loop, on a host that keeps what the store asks of it. The test
+//! takes each effect, or answers it with the intent its work would send, and an effect left waiting fails the test.
+//!
 //! Stores talk through outputs. A feature names an [`Output`](Feature::Output), `reduce` calls [`Effects::emit`], and
 //! [`Store::forward`] turns each output into an intent of another store. [`Lifecycle`] is built on them: a parent showing and
 //! hiding its children, and asking whether they can close.
@@ -102,6 +105,7 @@ mod macros;
 mod pulse;
 mod store;
 mod subscriptions;
+mod test_store;
 mod tracked;
 mod wake;
 
@@ -110,5 +114,6 @@ pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::Pulse;
 pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Seen, Step, Store, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
+pub use test_store::TestStore;
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};
 pub use wake::{Dropping, Listening, Waker, on_wake, on_watch};

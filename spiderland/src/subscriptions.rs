@@ -41,6 +41,11 @@ impl<K: PartialEq> Subscriptions<K> {
             }
         }
     }
+
+    /// Whether `key` was started and not yet stopped.
+    pub(crate) fn contains(&self, key: &K) -> bool {
+        self.live.iter().any(|(live, _)| live == key)
+    }
 }
 
 #[cfg(test)]

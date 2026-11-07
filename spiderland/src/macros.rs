@@ -72,7 +72,7 @@ macro_rules! callbacks {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Effects, Feature, Host, Intents, Never, Store};
+    use crate::{Effects, Feature, Intents, Never, Store, TestStore};
     use std::cell::Cell;
 
     struct Counter;
@@ -86,16 +86,6 @@ mod tests {
 
         fn reduce(state: &mut i32, by: i32, _: &mut Effects<Never>) {
             *state += by;
-        }
-    }
-
-    struct Quiet;
-
-    impl Host<Counter> for Quiet {
-        fn render(&mut self, _: &i32, _: &Intents<i32>) {}
-
-        fn perform(&mut self, effect: Never, _: &Intents<i32>) {
-            match effect {}
         }
     }
 
@@ -114,7 +104,7 @@ mod tests {
 
     #[test]
     fn the_view_and_the_store_are_each_evaluated_once() {
-        let store = Store::new(0, Quiet);
+        let store = TestStore::<Counter>::new(0);
         let (views, senders) = (Cell::new(0), Cell::new(0));
         let view = || {
             views.set(views.get() + 1);
@@ -122,14 +112,14 @@ mod tests {
         };
         let intents = || {
             senders.set(senders.get() + 1);
-            store.intents()
+            store.store().intents()
         };
         crate::callbacks!(view(), intents(), {
             on_one: || 1,
             on_add: |a, b| a + b,
         });
         assert_eq!((views.get(), senders.get()), (1, 1));
-        assert_eq!(store.try_read(|count| *count), Some(6), "both callbacks sent their intents");
+        assert_eq!(store.read(|count| *count), 6, "both callbacks sent their intents");
     }
 
     /// As a host's own function calls it, with the view and the store borrowed.
@@ -140,9 +130,9 @@ mod tests {
 
     #[test]
     fn a_borrowed_store_or_intents_is_cloned_not_the_reference() {
-        let store = Store::new(0, Quiet);
+        let store = TestStore::<Counter>::new(0);
         // Fails to build if a callback keeps the reference, which doesn't live as long as the view's `'static` callbacks.
-        connect(&View, &store, &store.intents());
-        assert_eq!(store.try_read(|count| *count), Some(6));
+        connect(&View, store.store(), &store.store().intents());
+        assert_eq!(store.read(|count| *count), 6);
     }
 }

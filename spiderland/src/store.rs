@@ -520,6 +520,11 @@ impl<F: Feature> Store<F> {
     pub fn try_read<R>(&self, read: impl FnOnce(&F::State) -> R) -> Option<R> {
         self.0.state.try_borrow().ok().map(|state| read(&state))
     }
+
+    /// Whether the store has started `key` for the state and not yet stopped it.
+    pub(crate) fn is_running(&self, key: &F::Subscription) -> bool {
+        self.0.subscriptions.borrow().contains(key)
+    }
 }
 
 impl<F: Feature> Inner<F> {
@@ -643,6 +648,7 @@ impl Drop for Draining<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TestStore;
 
     struct Counter;
 
@@ -767,19 +773,11 @@ mod tests {
                 *state += 1;
             }
         }
-        struct Quiet(Rc<Cell<i32>>);
-        impl Host<Fragile> for Quiet {
-            fn render(&mut self, state: &i32, _: &Intents<bool>) {
-                self.0.set(*state);
-            }
-            fn perform(&mut self, _: (), _: &Intents<bool>) {}
-        }
-        let shown = Rc::new(Cell::new(-1));
-        let store = Store::new(0, Quiet(shown.clone()));
+        let store = TestStore::<Fragile, _>::rendering(0, |state| *state);
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.send(true)));
         assert!(panicked.is_err());
         store.send(false);
-        assert_eq!(shown.get(), 1);
+        assert_eq!(store.take_renders().last(), Some(&1));
     }
 
     #[test]
@@ -1209,15 +1207,10 @@ mod tests {
                 assert_ne!(intent, "bad", "a fault in the reducer, expected by this test");
             }
         }
-        struct Quiet;
-        impl Host<Fragile> for Quiet {
-            fn render(&mut self, _: &(), _: &Intents<&'static str>) {}
-            fn perform(&mut self, (): (), _: &Intents<&'static str>) {}
-        }
-        let store = Store::new((), Quiet);
+        let store = TestStore::<Fragile>::new(());
         let trail = Rc::<RefCell<Vec<&'static str>>>::default();
         let keeping = Rc::clone(&trail);
-        store.observe(move |seen| {
+        store.store().observe(move |seen| {
             if let Seen::Intent(intent) = seen {
                 keeping.borrow_mut().push(intent);
             }
@@ -1346,13 +1339,8 @@ mod tests {
             type Output = Never;
             fn reduce(_: &mut (), (): (), _: &mut Effects<()>) {}
         }
-        struct Quiet;
-        impl Host<Plain> for Quiet {
-            fn render(&mut self, _: &(), _: &Intents<()>) {}
-            fn perform(&mut self, (): (), _: &Intents<()>) {}
-        }
         assert!(subscriptions::<Plain>(&()).is_empty());
-        Store::new((), Quiet).send(());
+        TestStore::<Plain>::new(()).send(());
     }
 
     #[test]
