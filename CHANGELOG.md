@@ -50,6 +50,11 @@ tag makes a GitHub release from that version's section.
   once, for a connection between stores that both go on.
 - `spiderland`: `Store::share`, which sends a projection of the state to another store now, and again after each batch in which it
   changed, so a store built later starts on the current value.
+- `spiderland`: `Background::stoppable`, with `Stop`, `Progress` and `Stopping`. It runs work on the app's pool that stops when its
+  guard is dropped, such as when a subscription's key goes, and reports progress as intents. Nothing of it arrives once it is
+  stopped.
+- `spiderland`: `Latest` and `Asked`, which number requests in the state so only the answer to the latest counts, and `OneAtATime`,
+  which keeps work such as saves from overlapping. Both are plain data for a reducer.
 - `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
   gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
   outcome is still heard.

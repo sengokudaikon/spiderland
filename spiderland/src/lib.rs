@@ -76,7 +76,9 @@
 //!
 //! Stores talk through outputs. A feature names an [`Output`](Feature::Output), `reduce` calls [`Effects::emit`], and
 //! [`Store::forward`] turns each output into an intent of another store. [`Lifecycle`] is built on them: a parent showing and
-//! hiding its children, and asking whether they can close.
+//! hiding its children, and asking whether they can close. A store built with [`Store::build`] is wired on a [`Wiring`] before
+//! it starts, so its listeners hear the start too. [`Store::share`] keeps another store current on part of the state, however
+//! late that store is built.
 //!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
 //!
@@ -86,7 +88,9 @@
 //!
 //! A host's work off the UI thread goes through [`Background`], and comes back as an intent. [`on_watch`] and [`on_wake`] let a
 //! service on another thread tell a feature that something changed. All of them run on an [`EventLoop`], the one thing they
-//! need from a toolkit, which a host crate such as `spiderland-slint` names once.
+//! need from a toolkit, which a host crate such as `spiderland-slint` names once. Work that runs while the state wants it, and
+//! says how far it has got, goes through [`Background::stoppable`]. [`Latest`] and [`OneAtATime`] are plain data for a reducer
+//! with work in flight: which answer still counts, and what waits its turn.
 //!
 //! [`Store::observe`] shows each intent and effect as a store runs it, so an app can keep a trail of what led to a fault.
 //!
@@ -102,16 +106,18 @@ mod error;
 mod lifecycle;
 mod macros;
 mod pulse;
+mod requests;
 mod store;
 mod subscriptions;
 mod test_store;
 mod tracked;
 mod wake;
 
-pub use background::{Background, EventLoop, Job};
+pub use background::{Background, EventLoop, Job, Progress, Stop, Stopping};
 pub use error::Error;
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::Pulse;
+pub use requests::{Asked, Latest, OneAtATime};
 pub use store::{Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, Wiring, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
 pub use test_store::TestStore;

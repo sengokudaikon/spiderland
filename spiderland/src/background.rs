@@ -3,10 +3,13 @@
 use crate::wake::{Dropping, droppable};
 use crate::{Error, Intents};
 use std::fmt;
+use std::future::poll_fn;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::oneshot;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::task::Poll;
+use tokio::sync::{mpsc, oneshot};
 
 /// The loop that runs a UI thread's events, and futures between them. It is the one thing [`Background`] and the listeners
 /// need from a toolkit, and a host crate implements it once: `spiderland-slint`'s `Slint` hands each future to
@@ -43,16 +46,18 @@ impl Drop for Delivered {
 
 /// Starts work on the app's pool, and waits on the UI thread run by `L`. Clone it into whatever hosts a feature.
 ///
-/// Its four ways in differ in where the work runs and how its result comes back:
+/// Its ways in differ in where the work runs and how its result comes back:
 ///
 /// | Method | The work | Its result |
 /// |---|---|---|
 /// | [`run`](Background::run) | Runs on the app's pool | Goes to the store as an intent, or why there is none as an [`Error`]. |
+/// | [`stoppable`](Background::stoppable) | Runs on the app's pool, and stops when the returned guard is dropped | As `run`'s, with progress as intents too, unless the guard is dropped first. |
 /// | [`wait`](Background::wait) | Is awaited on the UI thread | Goes to the store as an intent. |
 /// | [`finish`](Background::finish) | Is awaited on the UI thread | Goes to a closure, always. |
 /// | [`local`](Background::local) | Is awaited on the UI thread | Goes to a closure, unless the returned guard is dropped first. |
 ///
-/// Only `local` can be stopped by its caller. The others run to their end, and a result sent to a store that is gone goes nowhere.
+/// Only `stoppable` and `local` can be stopped by their caller. The others run to their end, and a result sent to a store that is
+/// gone goes nowhere.
 ///
 /// Every result comes back through the event loop. If that loop has stopped, or its [`EventLoop::spawn_local`] dropped the work, no
 /// result arrives, whichever method started it. So, to hear a write's outcome on the way out, keep the event loop running until
@@ -127,6 +132,107 @@ impl<L: EventLoop> Background<L> {
         });
     }
 
+    /// Runs `work` on the app's pool as [`Background::run`] does, but it can be stopped, and it can say how far it has got. Call it
+    /// from the UI thread, usually from [`Host::subscribe`](crate::Host::subscribe), so that the work runs for as long as the
+    /// state wants it.
+    ///
+    /// `work` is handed a [`Stop`] to check, and a [`Progress`] to report through. Each report goes to the store as
+    /// `progress(report)`. Reports that come faster than the UI thread takes them are merged: the store hears the latest.
+    ///
+    /// Dropping the returned [`Stopping`] stops it. The work sees that the next time it checks its [`Stop`], and nothing it sends
+    /// arrives after that, neither a report nor its result. That is safe at any moment, even while the store handles a report from
+    /// this very work. Work the pool refuses sends `then(Err(Error::Refused))` at once, as `run`'s does.
+    ///
+    /// ```
+    /// # use spiderland::{Background, EventLoop, Intents};
+    /// # struct Loop;
+    /// # impl EventLoop for Loop {
+    /// #     fn spawn_local(_: impl Future<Output = ()> + 'static) {}
+    /// # }
+    /// # enum Intent { Exported(Result<usize, spiderland::Error>), Done(usize) }
+    /// # fn export(background: &Background<Loop>, intents: &Intents<Intent>) {
+    /// let stopping = background.stoppable(
+    ///     intents,
+    ///     |stop, progress| {
+    ///         let mut done = 0;
+    ///         while done < 100 && !stop.is_stopped() {
+    ///             done += 1;
+    ///             progress.report(done);
+    ///         }
+    ///         done
+    ///     },
+    ///     Intent::Done,
+    ///     Intent::Exported,
+    /// );
+    /// # drop(stopping);
+    /// # }
+    /// ```
+    pub fn stoppable<T, P, I>(
+        &self,
+        intents: &Intents<I>,
+        work: impl FnOnce(&Stop, &Progress<P>) -> T + Send + 'static,
+        progress: impl Fn(P) -> I + 'static,
+        then: impl FnOnce(Result<T, Error>) -> I + 'static,
+    ) -> Stopping
+    where
+        T: Send + 'static,
+        P: Send + 'static,
+        I: 'static,
+    {
+        let stop = Stop(Arc::new(AtomicBool::new(false)));
+        let (report, mut reports) = mpsc::unbounded_channel();
+        let (reply, mut replied) = oneshot::channel();
+        let checked = stop.clone();
+        let job = Box::new(move || {
+            let mut reply = Reply(Some(reply));
+            let result = work(&checked, &Progress(report));
+            if let Some(reply) = reply.0.take() {
+                let _ = reply.send(Ok(result));
+            }
+        });
+        let (guard, mut dropped) = oneshot::channel::<()>();
+        let stopping = Stopping { stop, guard };
+        if !(self.start)(job) {
+            intents.send(then(Err(Error::Refused)));
+            return stopping;
+        }
+        let delivered = self.accepted();
+        let intents = intents.clone();
+        L::spawn_local(async move {
+            let _delivered = delivered;
+            let mut then = Some(then);
+            loop {
+                // Each turn ends before anything is sent, so the store that hears it can drop the guard.
+                let heard = poll_fn(|context| {
+                    if Pin::new(&mut dropped).poll(context).is_ready() {
+                        return Poll::Ready(Heard::Dropped);
+                    }
+                    if let Poll::Ready(result) = Pin::new(&mut replied).poll(context) {
+                        // No reply: the pool let go of the job before it began.
+                        return Poll::Ready(Heard::Done(result.unwrap_or(Err(Error::Dropped))));
+                    }
+                    let mut latest = None;
+                    while let Poll::Ready(Some(report)) = reports.poll_recv(context) {
+                        latest = Some(report);
+                    }
+                    latest.map_or(Poll::Pending, |report| Poll::Ready(Heard::Report(report)))
+                })
+                .await;
+                match heard {
+                    Heard::Dropped => break,
+                    Heard::Report(report) => intents.send(progress(report)),
+                    Heard::Done(result) => {
+                        if let Some(then) = then.take() {
+                            intents.send(then(result));
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+        stopping
+    }
+
     /// Waits for `work` on the UI thread, then sends `then(result)` to `intents`: for an answer that arrives by itself, such as
     /// a reply from a worker, with no pool thread held while it does. Nothing the caller holds can stop it, and the pool closing
     /// doesn't either. It ends with the event loop, though, as all of these do. Call it from the UI thread. A panic here is a
@@ -174,8 +280,67 @@ impl<L: EventLoop> Background<L> {
     }
 
     /// Accepted work whose result hasn't been delivered yet, for a test to wait on. Work the event loop drops counts off too,
-    /// though nothing was delivered.
+    /// though nothing was delivered, and so does stopped work once nothing of it can arrive.
     pub fn pending(&self) -> usize {
         self.pending.load(Ordering::Acquire)
+    }
+}
+
+/// What the UI thread heard of stoppable work.
+enum Heard<T, P> {
+    Dropped,
+    Report(P),
+    Done(Result<T, Error>),
+}
+
+/// What work started by [`Background::stoppable`] checks, to know when to stop.
+#[derive(Clone, Debug)]
+pub struct Stop(Arc<AtomicBool>);
+
+impl Stop {
+    /// True once the work's [`Stopping`] has been dropped. Work checks it between steps and returns early, with whatever it has.
+    /// Nothing it returns after that arrives anywhere.
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// How work started by [`Background::stoppable`] says how far it has got.
+pub struct Progress<P>(mpsc::UnboundedSender<P>);
+
+impl<P> fmt::Debug for Progress<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Progress").field("heard", &!self.0.is_closed()).finish()
+    }
+}
+
+impl<P> Progress<P> {
+    /// Sends `report` to the store, as the intent the work was started with makes of it. It never blocks. Reports made faster than
+    /// the UI thread takes them are merged, so the store hears the latest. Once the work is stopped, it does nothing.
+    pub fn report(&self, report: P) {
+        let _ = self.0.send(report);
+    }
+}
+
+/// Stops work started by [`Background::stoppable`] when dropped. It can be a guard for a subscription, so the work runs for as long
+/// as the state wants it.
+#[derive(Debug)]
+#[must_use = "dropping it stops the work at once"]
+pub struct Stopping {
+    stop: Stop,
+    /// Dropped after the flag is set, which wakes the UI thread's side so it lets go.
+    guard: oneshot::Sender<()>,
+}
+
+impl Stopping {
+    /// True once the work is over, whether it finished or the pool let go of it, so nothing of it is left to arrive.
+    pub fn is_finished(&self) -> bool {
+        self.guard.is_closed()
+    }
+}
+
+impl Drop for Stopping {
+    fn drop(&mut self) {
+        self.stop.0.store(true, Ordering::Release);
     }
 }

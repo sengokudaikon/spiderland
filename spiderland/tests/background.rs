@@ -5,6 +5,8 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Context;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -247,4 +249,154 @@ fn a_load_keyed_on_its_query_is_dropped_when_the_query_changes() {
     until("the answer", || shown.get().found.is_some());
     assert_eq!(shown.get().found, Some(("ab", 2)));
     assert!(loads.borrow().is_empty(), "an answered query starts no load");
+}
+
+/// An export that runs while the state wants it, and stops itself once it has heard three reports.
+struct Export;
+
+#[derive(Clone, Default)]
+struct Exporting {
+    running: bool,
+    reports: Vec<usize>,
+    result: Option<Result<usize, Error>>,
+}
+
+enum ExportIntent {
+    Reported(usize),
+    Exported(Result<usize, Error>),
+}
+
+#[derive(Debug, PartialEq)]
+struct Running;
+
+impl Feature for Export {
+    type State = Exporting;
+    type Intent = ExportIntent;
+    type Effect = Never;
+    type Output = Never;
+    type Subscription = Running;
+
+    fn reduce(state: &mut Exporting, intent: ExportIntent, _: &mut Effects<Never>) {
+        match intent {
+            ExportIntent::Reported(done) => {
+                state.reports.push(done);
+                state.running = done < 3;
+            }
+            ExportIntent::Exported(result) => {
+                state.result = Some(result);
+                state.running = false;
+            }
+        }
+    }
+
+    fn subscriptions(state: &Exporting) -> impl IntoIterator<Item = Running> {
+        state.running.then_some(Running)
+    }
+}
+
+struct Exporter {
+    background: Background<ByHand>,
+    shown: Rc<RefCell<Exporting>>,
+    /// Set by the work as it returns.
+    returned: Arc<AtomicBool>,
+}
+
+impl Host<Export> for Exporter {
+    fn render(&mut self, state: &Exporting, _: &Intents<ExportIntent>) {
+        self.shown.borrow_mut().clone_from(state);
+    }
+
+    fn perform(&mut self, effect: Never, _: &Intents<ExportIntent>) {
+        match effect {}
+    }
+
+    fn subscribe(&mut self, Running: &Running, intents: &Intents<ExportIntent>) -> Box<dyn Any> {
+        let returned = Arc::clone(&self.returned);
+        let stopping = self.background.stoppable(
+            intents,
+            move |stop, progress| {
+                let mut done = 0;
+                while !stop.is_stopped() {
+                    done += 1;
+                    progress.report(done);
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                returned.store(true, Ordering::SeqCst);
+                done
+            },
+            ExportIntent::Reported,
+            ExportIntent::Exported,
+        );
+        Box::new(stopping)
+    }
+}
+
+fn pool() -> Background<ByHand> {
+    Background::new(|job| {
+        std::thread::spawn(job);
+        true
+    })
+}
+
+#[test]
+fn stoppable_work_reports_and_then_finishes() {
+    let shown = Rc::default();
+    let store = Store::new(State::default(), Shown(Rc::clone(&shown)));
+    let intents = store.intents();
+    let background = pool();
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let stopping = background.stoppable(
+        &intents,
+        move |_, progress| {
+            progress.report(1);
+            gate.recv().unwrap();
+            progress.report(2);
+            gate.recv().unwrap();
+            7
+        },
+        |_: i32| Intent::Woken,
+        Intent::Finished,
+    );
+    until("the first report", || shown.borrow().wakes == 1);
+    go.send(()).unwrap();
+    until("the second report", || shown.borrow().wakes == 2);
+    assert!(!stopping.is_finished());
+    go.send(()).unwrap();
+    until("the result", || background.pending() == 0);
+    assert_eq!(shown.borrow().results, [Ok(7)]);
+    assert!(stopping.is_finished());
+}
+
+#[test]
+fn stoppable_work_stops_with_its_subscription_even_while_the_store_hears_it() {
+    let shown = Rc::new(RefCell::new(Exporting::default()));
+    let returned = Arc::new(AtomicBool::new(false));
+    let background = pool();
+    let host = Exporter {
+        background: background.clone(),
+        shown: Rc::clone(&shown),
+        returned: Arc::clone(&returned),
+    };
+    let _store = Store::new(Exporting { running: true, ..Exporting::default() }, host);
+    until("the work to stop and return", || returned.load(Ordering::SeqCst));
+    until("nothing left to arrive", || background.pending() == 0);
+    for _ in 0..5 {
+        turn();
+    }
+    let state = shown.borrow();
+    // Reports can merge, so the one that stopped the work may be past 3. It is the last one heard.
+    assert_eq!(state.reports.iter().filter(|&&done| done >= 3).count(), 1, "nothing arrived after the report that stopped it");
+    assert!(state.reports.windows(2).all(|pair| pair[0] < pair[1]), "reports arrive in order, merged or not");
+    assert!(state.result.is_none(), "what stopped work returns arrives nowhere");
+}
+
+#[test]
+fn stoppable_work_the_pool_refuses_comes_back_at_once() {
+    let shown = Rc::default();
+    let store = Store::new(State::default(), Shown(Rc::clone(&shown)));
+    let refusing = Background::<ByHand>::new(|_| false);
+    let stopping = refusing.stoppable(&store.intents(), |_, _: &spiderland::Progress<i32>| 1, |_| Intent::Woken, Intent::Finished);
+    assert_eq!(shown.borrow().results, [Err(Error::Refused)]);
+    assert_eq!(refusing.pending(), 0);
+    drop(stopping);
 }

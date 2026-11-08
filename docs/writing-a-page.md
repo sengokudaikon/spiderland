@@ -80,8 +80,14 @@ fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
 }
 ```
 
-Work on the pool can't be stopped: `Background::run` runs to its end. For that, the reducer checks that an answer is for the query
-the state still holds.
+Work that `Background::run` starts on the pool can't be stopped. Start it with `Background::stoppable` from `subscribe` instead,
+and the store stops it when the key goes: the work checks its `Stop`, and can report how far it has got through its `Progress`.
+Or number the requests with `Latest`, kept in the state, so the reducer counts only the answer to the latest one.
+
+**One at a time**
+
+Saves of one thing shouldn't overlap. Keep a `OneAtATime` in the state: the reducer asks it for each save, starts the one it gives
+back, and calls `done` when a save's answer comes. The latest save asked for meanwhile waits, in place of any before it.
 
 **Work with no result**
 
