@@ -58,6 +58,9 @@ tag makes a GitHub release from that version's section.
 - `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
   gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
   outcome is still heard.
+- `spiderland-slint`: `testing::Headless::separate_windows`, after which each component made gets a window of its own, and
+  `Headless::on`, whose `testing::Input` sends real input to one window. `Input::close` asks a window to close, as its title
+  bar's button does. Until `separate_windows`, every component shows in `Headless::window`, as before.
 
 ### Changed
 

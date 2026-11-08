@@ -20,6 +20,22 @@
 //! # let _ = frame;
 //! ```
 //!
+//! Every component shows in the one [`Headless::window`] until [`Headless::separate_windows`]. From then on, each component made
+//! gets a window of its own, and [`Headless::on`] sends input to one of them:
+//!
+//! ```no_run
+//! # slint::slint! { export component Editor { } }
+//! use slint::ComponentHandle;
+//! use spiderland_slint::testing::Headless;
+//!
+//! let headless = Headless::install();
+//! headless.separate_windows();
+//! let (first, second) = (Editor::new().unwrap(), Editor::new().unwrap());
+//! headless.on(second.window()).resize(400, 300);
+//! headless.on(second.window()).type_text("hello");
+//! # let _ = first;
+//! ```
+//!
 //! `take_snapshot` gives the frame as RGBA, for the test to save or compare. Software-rendered pixels differ a little from
 //! FemtoVG's and Skia's, so a capture that must match the app exactly needs an app shipped with `renderer-software`.
 //!
@@ -35,8 +51,8 @@
 use crate::Background;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Clipboard, EventLoopProxy, Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{EventLoopError, LogicalPosition, PhysicalSize, PlatformError, SharedString};
-use std::cell::RefCell;
+use slint::{EventLoopError, LogicalPosition, PhysicalSize, PlatformError, SharedString, Window};
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
 use std::rc::{Rc, Weak};
@@ -52,18 +68,31 @@ static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static ADVANCED_MS: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
-    static WINDOW: RefCell<Weak<MinimalSoftwareWindow>> = const { RefCell::new(Weak::new()) };
+    /// Every window made, the first one included.
+    static WINDOWS: RefCell<Vec<Weak<MinimalSoftwareWindow>>> = const { RefCell::new(Vec::new()) };
+    /// Whether each component made from now on gets a window of its own.
+    static SEPARATE: Cell<bool> = const { Cell::new(false) };
     static CLIPBOARD: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// A window for a component to show in, kept in `WINDOWS`.
+fn new_window() -> Rc<MinimalSoftwareWindow> {
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+    WINDOWS.with_borrow_mut(|windows| {
+        windows.retain(|kept| kept.strong_count() > 0);
+        windows.push(Rc::downgrade(&window));
+    });
+    window
 }
 
 struct Proxy;
 
 impl EventLoopProxy for Proxy {
     fn quit_event_loop(&self) -> Result<(), EventLoopError> {
-        // Slint asks to quit when the last window hides, and a test may well hide one window and open another. A quit while a
-        // window shows, or from another thread, is a fault in what is being tested.
-        let visible = WINDOW.try_with(|slot| slot.borrow().upgrade().map(|window| window.window().is_visible())).ok().flatten();
-        if visible != Some(false) {
+        // Slint asks to quit when the last window that shows hides, and a test may well hide one window and open another. A quit
+        // while any window shows, or from another thread, is a fault in what is being tested.
+        let showing = WINDOWS.try_with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).any(|window| window.is_visible()));
+        if showing != Ok(false) {
             QUIT_REQUESTED.store(true, Ordering::SeqCst);
         }
         Ok(())
@@ -76,7 +105,8 @@ impl EventLoopProxy for Proxy {
 }
 
 struct HeadlessPlatform {
-    window: Rc<MinimalSoftwareWindow>,
+    /// What every component shows in, until [`Headless::separate_windows`].
+    first: Rc<MinimalSoftwareWindow>,
     /// Real time counts as well, for what a test waits on for real. None holds the clock still between [`advance`]s.
     started: Option<Instant>,
 }
@@ -95,7 +125,7 @@ impl Platform for HeadlessPlatform {
     }
 
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        Ok(self.window.clone())
+        if SEPARATE.get() { Ok(new_window()) } else { Ok(self.first.clone()) }
     }
 
     fn duration_since_start(&self) -> Duration {
@@ -103,9 +133,11 @@ impl Platform for HeadlessPlatform {
     }
 }
 
-/// The process's one window, and real input to it. Every action ends with a [`settle`].
+/// The platform with no display, and real input to its windows. Every action ends with a [`settle`].
+///
+/// Its own input methods go to [`Headless::window`]. Those of [`Headless::on`] go to the window it is given.
 pub struct Headless {
-    /// The window every component shows in, for events this has no method for.
+    /// The window every component shows in, until [`Headless::separate_windows`]. It is here for events this has no method for.
     pub window: Rc<MinimalSoftwareWindow>,
 }
 
@@ -127,66 +159,126 @@ impl Headless {
     }
 
     fn with_clock(started: Option<Instant>) -> Headless {
-        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-        WINDOW.with(|slot| *slot.borrow_mut() = Rc::downgrade(&window));
-        slint::platform::set_platform(Box::new(HeadlessPlatform { window: window.clone(), started })).expect("the platform is set once per process");
+        let window = new_window();
+        let platform = HeadlessPlatform { first: window.clone(), started };
+        slint::platform::set_platform(Box::new(platform)).expect("the platform is set once per process");
         Headless { window }
+    }
+
+    /// From now on, each component made gets a window of its own, as it would on a desktop. Until then, every component shows in
+    /// [`Headless::window`], and a new one takes the place of the one before. Input to a window of its own goes through
+    /// [`Headless::on`]. Such a window starts with no size, so a test resizes it first.
+    pub fn separate_windows(&self) {
+        SEPARATE.set(true);
+    }
+
+    /// Real input to `window`, such as `component.window()`.
+    pub fn on<'a>(&self, window: &'a Window) -> Input<'a> {
+        Input(window)
     }
 
     /// A left click at `x`, `y`, in logical pixels.
     pub fn click(&self, x: f32, y: f32) {
-        let position = LogicalPosition::new(x, y);
-        let button = PointerEventButton::Left;
-        self.window.dispatch_event(WindowEvent::PointerMoved { position });
-        self.window.dispatch_event(WindowEvent::PointerPressed { position, button });
-        self.window.dispatch_event(WindowEvent::PointerReleased { position, button });
-        settle();
+        self.on(&self.window).click(x, y);
     }
 
     /// A scroll of `delta_y` logical pixels with the pointer at `x`, `y`.
     pub fn scroll(&self, x: f32, y: f32, delta_y: f32) {
-        let position = LogicalPosition::new(x, y);
-        self.window.dispatch_event(WindowEvent::PointerMoved { position });
-        self.window.dispatch_event(WindowEvent::PointerScrolled { position, delta_x: 0.0, delta_y });
-        settle();
+        self.on(&self.window).scroll(x, y, delta_y);
     }
 
     /// Types `text`, one key per character.
     pub fn type_text(&self, text: &str) {
-        for c in text.chars() {
-            let text = SharedString::from(c.to_string());
-            self.window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
-            self.window.dispatch_event(WindowEvent::KeyReleased { text });
-        }
-        settle();
+        self.on(&self.window).type_text(text);
     }
 
     /// `key` with Control held.
     pub fn control_key(&self, key: &str) {
-        let control = SharedString::from(Key::Control);
-        self.window.dispatch_event(WindowEvent::KeyPressed { text: control.clone() });
-        self.type_text(key);
-        self.window.dispatch_event(WindowEvent::KeyReleased { text: control });
-        settle();
+        self.on(&self.window).control_key(key);
     }
 
     /// Presses and releases `key`.
     pub fn key(&self, key: Key) {
-        let text = SharedString::from(key);
-        self.window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
-        self.window.dispatch_event(WindowEvent::KeyReleased { text });
-        settle();
+        self.on(&self.window).key(key);
     }
 
     /// Resizes the window to `width` by `height` physical pixels.
     pub fn resize(&self, width: u32, height: u32) {
-        self.window.set_size(PhysicalSize::new(width, height));
-        settle();
+        self.on(&self.window).resize(width, height);
     }
 
     /// What the app last copied, in the test's own clipboard.
     pub fn clipboard(&self) -> String {
         CLIPBOARD.with_borrow(Clone::clone)
+    }
+}
+
+/// Real input to one window, from [`Headless::on`]. Every action ends with a [`settle`].
+#[derive(Clone, Copy)]
+pub struct Input<'a>(&'a Window);
+
+impl fmt::Debug for Input<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Input").field("size", &self.0.size()).finish_non_exhaustive()
+    }
+}
+
+impl Input<'_> {
+    /// A left click at `x`, `y`, in logical pixels.
+    pub fn click(self, x: f32, y: f32) {
+        let position = LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        self.0.dispatch_event(WindowEvent::PointerMoved { position });
+        self.0.dispatch_event(WindowEvent::PointerPressed { position, button });
+        self.0.dispatch_event(WindowEvent::PointerReleased { position, button });
+        settle();
+    }
+
+    /// A scroll of `delta_y` logical pixels with the pointer at `x`, `y`.
+    pub fn scroll(self, x: f32, y: f32, delta_y: f32) {
+        let position = LogicalPosition::new(x, y);
+        self.0.dispatch_event(WindowEvent::PointerMoved { position });
+        self.0.dispatch_event(WindowEvent::PointerScrolled { position, delta_x: 0.0, delta_y });
+        settle();
+    }
+
+    /// Types `text`, one key per character.
+    pub fn type_text(self, text: &str) {
+        for c in text.chars() {
+            let text = SharedString::from(c.to_string());
+            self.0.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+            self.0.dispatch_event(WindowEvent::KeyReleased { text });
+        }
+        settle();
+    }
+
+    /// `key` with Control held.
+    pub fn control_key(self, key: &str) {
+        let control = SharedString::from(Key::Control);
+        self.0.dispatch_event(WindowEvent::KeyPressed { text: control.clone() });
+        self.type_text(key);
+        self.0.dispatch_event(WindowEvent::KeyReleased { text: control });
+        settle();
+    }
+
+    /// Presses and releases `key`.
+    pub fn key(self, key: Key) {
+        let text = SharedString::from(key);
+        self.0.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        self.0.dispatch_event(WindowEvent::KeyReleased { text });
+        settle();
+    }
+
+    /// Resizes the window to `width` by `height` physical pixels.
+    pub fn resize(self, width: u32, height: u32) {
+        self.0.set_size(PhysicalSize::new(width, height));
+        settle();
+    }
+
+    /// Asks the window to close, as its title bar's close button does. What happens next is up to its `on_close_requested`.
+    pub fn close(self) {
+        self.0.dispatch_event(WindowEvent::CloseRequested);
+        settle();
     }
 }
 
