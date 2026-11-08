@@ -1,100 +1,102 @@
-//! A small lifecycle a parent drives: a child is shown, hidden, or asked whether it can close. It has no machinery of its own. A
-//! parent emits [`Lifecycle`] as an output, and a child opts in by mapping it to an intent. The child answers with a
-//! [`CloseAnswer`] of its own, whenever it is ready, and the parent's [`Closing`] counts the answers. When the window stays
-//! after all, the parent tells its children with [`Lifecycle::CloseCalledOff`].
-//!
-//! A window that closes once its editor has saved:
-//!
-//! ```
-//! use spiderland::{CloseAnswer, Closing, Effects, Feature, Host, Intents, Lifecycle, Never, Store};
-//!
-//! struct Window;
-//! /// The children the window asks, by a name of its own.
-//! #[derive(PartialEq)]
-//! enum Child {
-//!     Editor,
-//! }
-//! enum WindowIntent {
-//!     CloseClicked,
-//!     Answered(Child, CloseAnswer),
-//! }
-//! impl Feature for Window {
-//!     type State = Option<Closing<Child>>;
-//!     type Intent = WindowIntent;
-//!     type Effect = &'static str;
-//!     type Output = Lifecycle;
-//!     type Subscription = Never;
-//!
-//!     fn reduce(closing: &mut Option<Closing<Child>>, intent: WindowIntent, effects: &mut Effects<&'static str, Lifecycle>) {
-//!         match intent {
-//!             WindowIntent::CloseClicked => {
-//!                 *closing = Some(Closing::asking([Child::Editor]));
-//!                 effects.emit(Lifecycle::CloseRequested);
-//!             }
-//!             WindowIntent::Answered(child, answer) => {
-//!                 let answer = closing.as_mut().and_then(|closing| closing.hear(child, answer));
-//!                 if answer.is_some() {
-//!                     *closing = None;
-//!                 }
-//!                 match answer {
-//!                     Some(CloseAnswer::Closed) => effects.push("close the window"),
-//!                     Some(CloseAnswer::StayingOpen) => effects.emit(Lifecycle::CloseCalledOff),
-//!                     None => {}
-//!                 }
-//!             }
-//!         }
-//!     }
-//! }
-//!
-//! struct Editor;
-//! enum EditorIntent {
-//!     Life(Lifecycle),
-//!     Saved,
-//! }
-//! impl Feature for Editor {
-//!     type State = ();
-//!     type Intent = EditorIntent;
-//!     type Effect = &'static str;
-//!     type Output = CloseAnswer;
-//!     type Subscription = Never;
-//!
-//!     fn reduce(_: &mut (), intent: EditorIntent, effects: &mut Effects<&'static str, CloseAnswer>) {
-//!         match intent {
-//!             EditorIntent::Life(Lifecycle::CloseRequested) => effects.push("save"),
-//!             EditorIntent::Life(Lifecycle::Shown | Lifecycle::Hidden | Lifecycle::CloseCalledOff) => {}
-//!             EditorIntent::Saved => effects.emit(CloseAnswer::Closed),
-//!         }
-//!     }
-//! }
-//!
-//! # use std::{cell::RefCell, rc::Rc};
-//! # struct Log(Rc<RefCell<Vec<&'static str>>>);
-//! # impl Host<Window> for Log {
-//! #     fn render(&mut self, _: &Option<Closing<Child>>, _: &Intents<WindowIntent>) {}
-//! #     fn perform(&mut self, effect: &'static str, _: &Intents<WindowIntent>) {
-//! #         self.0.borrow_mut().push(effect);
-//! #     }
-//! # }
-//! # impl Host<Editor> for Log {
-//! #     fn render(&mut self, _: &(), _: &Intents<EditorIntent>) {}
-//! #     fn perform(&mut self, effect: &'static str, intents: &Intents<EditorIntent>) {
-//! #         self.0.borrow_mut().push(effect);
-//! #         intents.send(EditorIntent::Saved);
-//! #     }
-//! # }
-//! # let log = Rc::new(RefCell::new(Vec::new()));
-//! # let window_host = Log(log.clone());
-//! # let editor_host = Log(log.clone());
-//! let window = Store::<Window>::new(None, window_host);
-//! let editor = Store::<Editor>::new((), editor_host);
-//! window.forward(&editor.intents().map(EditorIntent::Life), |life| *life);
-//! editor.forward(&window.intents(), |answer| WindowIntent::Answered(Child::Editor, *answer));
-//!
-//! window.send(WindowIntent::CloseClicked);
-//! # assert_eq!(*log.borrow(), ["save", "close the window"]);
-//! ```
+//! A small lifecycle a parent drives: showing and hiding its children, and asking whether they can close.
 
 /// What a parent tells a child about its place on screen.
+///
+/// A child is shown, hidden, or asked whether it can close. There is no machinery behind it. A parent emits [`Lifecycle`] as an
+/// output, and a child opts in by mapping it to an intent. The child answers with a [`CloseAnswer`] of its own, whenever it is
+/// ready, and the parent's [`Closing`] counts the answers. When the window stays after all, the parent tells its children with
+/// [`Lifecycle::CloseCalledOff`].
+///
+/// A window that closes once its editor has saved:
+///
+/// ```
+/// use spiderland::{CloseAnswer, Closing, Effects, Feature, Host, Intents, Lifecycle, Never, Store};
+///
+/// struct Window;
+/// /// The children the window asks, by a name of its own.
+/// #[derive(PartialEq)]
+/// enum Child {
+///     Editor,
+/// }
+/// enum WindowIntent {
+///     CloseClicked,
+///     Answered(Child, CloseAnswer),
+/// }
+/// impl Feature for Window {
+///     type State = Option<Closing<Child>>;
+///     type Intent = WindowIntent;
+///     type Effect = &'static str;
+///     type Output = Lifecycle;
+///     type Subscription = Never;
+///
+///     fn reduce(closing: &mut Option<Closing<Child>>, intent: WindowIntent, effects: &mut Effects<&'static str, Lifecycle>) {
+///         match intent {
+///             WindowIntent::CloseClicked => {
+///                 *closing = Some(Closing::asking([Child::Editor]));
+///                 effects.emit(Lifecycle::CloseRequested);
+///             }
+///             WindowIntent::Answered(child, answer) => {
+///                 let answer = closing.as_mut().and_then(|closing| closing.hear(child, answer));
+///                 if answer.is_some() {
+///                     *closing = None;
+///                 }
+///                 match answer {
+///                     Some(CloseAnswer::Closed) => effects.push("close the window"),
+///                     Some(CloseAnswer::StayingOpen) => effects.emit(Lifecycle::CloseCalledOff),
+///                     None => {}
+///                 }
+///             }
+///         }
+///     }
+/// }
+///
+/// struct Editor;
+/// enum EditorIntent {
+///     Life(Lifecycle),
+///     Saved,
+/// }
+/// impl Feature for Editor {
+///     type State = ();
+///     type Intent = EditorIntent;
+///     type Effect = &'static str;
+///     type Output = CloseAnswer;
+///     type Subscription = Never;
+///
+///     fn reduce(_: &mut (), intent: EditorIntent, effects: &mut Effects<&'static str, CloseAnswer>) {
+///         match intent {
+///             EditorIntent::Life(Lifecycle::CloseRequested) => effects.push("save"),
+///             EditorIntent::Life(Lifecycle::Shown | Lifecycle::Hidden | Lifecycle::CloseCalledOff) => {}
+///             EditorIntent::Saved => effects.emit(CloseAnswer::Closed),
+///         }
+///     }
+/// }
+///
+/// # use std::{cell::RefCell, rc::Rc};
+/// # struct Log(Rc<RefCell<Vec<&'static str>>>);
+/// # impl Host<Window> for Log {
+/// #     fn render(&mut self, _: &Option<Closing<Child>>, _: &Intents<WindowIntent>) {}
+/// #     fn perform(&mut self, effect: &'static str, _: &Intents<WindowIntent>) {
+/// #         self.0.borrow_mut().push(effect);
+/// #     }
+/// # }
+/// # impl Host<Editor> for Log {
+/// #     fn render(&mut self, _: &(), _: &Intents<EditorIntent>) {}
+/// #     fn perform(&mut self, effect: &'static str, intents: &Intents<EditorIntent>) {
+/// #         self.0.borrow_mut().push(effect);
+/// #         intents.send(EditorIntent::Saved);
+/// #     }
+/// # }
+/// # let log = Rc::new(RefCell::new(Vec::new()));
+/// # let window_host = Log(log.clone());
+/// # let editor_host = Log(log.clone());
+/// let window = Store::<Window>::new(None, window_host);
+/// let editor = Store::<Editor>::new((), editor_host);
+/// window.forward(&editor.intents().map(EditorIntent::Life), |life| *life);
+/// editor.forward(&window.intents(), |answer| WindowIntent::Answered(Child::Editor, *answer));
+///
+/// window.send(WindowIntent::CloseClicked);
+/// # assert_eq!(*log.borrow(), ["save", "close the window"]);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lifecycle {
     /// The child is on screen.
@@ -118,7 +120,8 @@ pub enum CloseAnswer {
 }
 
 /// A parent's wait for its children's answers, kept in its state. The parent names each child by a key of its own, such as an
-/// index or a page, and each child gets one vote. One child staying open keeps the window open.
+/// index or a page, and each child gets one vote. One child staying open keeps the window open. [`Lifecycle`] shows a window
+/// that closes once its editor has saved.
 ///
 /// It waits for every answer even so. By the time the window stays open, a child that answered closed may have done its closing
 /// work, such as a save. Told [`Lifecycle::CloseCalledOff`] before it answers, a child would start that work again while it is

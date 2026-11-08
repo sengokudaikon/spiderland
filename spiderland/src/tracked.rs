@@ -16,8 +16,11 @@ impl Version {
     }
 }
 
-/// A value whose version moves whenever it could have changed. Any `&mut` access counts, so a reducer can't change it and
-/// forget to say so. Access that changes nothing still counts: at worst that redoes a render, and it never misses one.
+/// A value whose version moves on every `&mut` access, so a reducer can't change it and forget to say so. Access that changes
+/// nothing still counts: at worst that redoes a render.
+///
+/// It sees only `&mut` access. What changes through `&`, such as a `Cell`, a `RefCell` or an `Rc` shared with something else,
+/// changes with no new version, and a render keyed on it goes on showing the old value. Keep such things out of a `Tracked`.
 #[derive(Clone, Debug)]
 pub struct Tracked<T> {
     value: T,
@@ -68,7 +71,8 @@ impl<T> DerefMut for Tracked<T> {
 
 /// One part of a render, redone only when its key changes. The key is usually the versions of what that part reads:
 /// `(files.version(), filter.version())`. A key missing an input shows stale values, so keep it beside the function it
-/// guards, which should take only those inputs. [`Slice::show`] makes the key from that function's inputs, so it can't miss one.
+/// guards, which should take only those inputs. [`Slice::show`] makes the key from that function's inputs, so an input can't be
+/// left out of it by mistake.
 #[derive(Debug)]
 pub struct Slice<K> {
     key: Option<K>,
@@ -81,22 +85,23 @@ impl<K> Default for Slice<K> {
 }
 
 impl<K: PartialEq> Slice<K> {
-    /// Runs `apply` on the first call and whenever `key` differs from the last one. True when it ran.
+    /// Runs `apply` on the first call and whenever `key` differs from the last one. True when it ran. The key is kept once
+    /// `apply` returns, so if it panics, the next call runs it again.
     pub fn update(&mut self, key: K, apply: impl FnOnce()) -> bool {
         if self.key.as_ref() == Some(&key) {
             return false;
         }
-        self.key = Some(key);
         apply();
+        self.key = Some(key);
         true
     }
 
     /// Makes a value from `inputs` and hands it to `apply`, on the first call and whenever their key differs from the last one.
-    /// True when it ran.
+    /// True when it ran. The key is kept once `apply` returns, so if `make` or `apply` panics, the next call runs them again.
     ///
-    /// `make` is a plain `fn`, so it reads only what it is given, and the key is made from the same inputs. An input left out
-    /// can't be read, so it can't be missing from the key. It can still read statics, such as the language shown, which is set
-    /// once per process.
+    /// `make` is a plain `fn`, so it can't capture: it reads what it is given, and the key is made from the same inputs. That
+    /// stops an input from being left out of the key by mistake, but doesn't rule it out. A `fn` can still read statics and
+    /// thread-locals, such as the language shown, and what changes through `&` inside a [`Tracked`], which its version doesn't see.
     ///
     /// ```
     /// use spiderland::{Slice, Tracked};
@@ -129,8 +134,8 @@ impl<K: PartialEq> Slice<K> {
         if self.key.as_ref() == Some(&key) {
             return false;
         }
-        self.key = Some(key);
         apply(inputs.make(make));
+        self.key = Some(key);
         true
     }
 }
@@ -278,7 +283,7 @@ impl<K, V> Default for CheckedSlice<K, V> {
 
 impl<K: PartialEq, V: PartialEq + Clone> CheckedSlice<K, V> {
     /// Makes the value and shows it, on the first call and whenever `key` differs from the last one. `name` says which slice
-    /// a failed check is.
+    /// a failed check is. The key is kept once `show` returns, so if `make` or `show` panics, the next call runs them again.
     pub fn update(&mut self, name: &str, key: K, make: impl FnOnce() -> V, show: impl FnOnce(V)) {
         if self.key.as_ref() == Some(&key) {
             #[cfg(feature = "testing")]
@@ -290,13 +295,15 @@ impl<K: PartialEq, V: PartialEq + Clone> CheckedSlice<K, V> {
             let _ = (name, make);
             return;
         }
-        self.key = Some(key);
         let value = make();
         #[cfg(feature = "testing")]
-        {
-            self.shown = Some(value.clone());
-        }
+        let kept = value.clone();
         show(value);
+        self.key = Some(key);
+        #[cfg(feature = "testing")]
+        {
+            self.shown = Some(kept);
+        }
     }
 }
 
@@ -393,6 +400,24 @@ mod tests {
         let mut count: Slice<u8> = Slice::default();
         assert!(count.show((4u8,), |count| count * 2, |_| {}));
         assert!(!count.show((4u8,), |count| count * 2, |_| {}));
+    }
+
+    #[test]
+    fn a_slice_whose_showing_panicked_shows_again_for_the_same_key() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let mut slice = Slice::default();
+        assert!(catch_unwind(AssertUnwindSafe(|| slice.update(1, || panic!("the view went away")))).is_err());
+        assert!(slice.update(1, || {}), "update runs again");
+
+        let mut shown = Slice::default();
+        assert!(catch_unwind(AssertUnwindSafe(|| shown.show((1u8,), |count| count, |_| panic!("the view went away")))).is_err());
+        assert!(shown.show((1u8,), |count| count, |_| {}), "show runs again");
+
+        let mut checked = CheckedSlice::default();
+        assert!(catch_unwind(AssertUnwindSafe(|| checked.update("test", 1, || "a", |_| panic!("the view went away")))).is_err());
+        let mut again = Vec::new();
+        checked.update("test", 1, || "a", |value| again.push(value));
+        assert_eq!(again, ["a"], "a checked slice runs again");
     }
 
     #[test]

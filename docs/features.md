@@ -19,7 +19,7 @@
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
 | `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |
 | `Tracked`, `Slice` | Redo only the parts of a render whose inputs changed. A `Version` names one state of a `Tracked`. |
-| `Slice::show`, `Input`, `Inputs` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none can be left out. |
+| `Slice::show`, `Input`, `Inputs` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none is left out by mistake. |
 | `CheckedSlice` | A `Slice` that fails when its key misses an input. It checks only under the `testing` feature, for tests. |
 | `Feature::subscriptions`, `Host::subscribe` | The feature names what its state wants running, the host starts it, and the store stops it once it isn't wanted. |
 | `Subscriptions` | Keeps things running by key. The store uses it for a feature's subscriptions. |

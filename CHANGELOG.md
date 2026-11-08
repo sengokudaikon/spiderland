@@ -27,7 +27,7 @@ tag makes a GitHub release from that version's section.
   keeps an inner change off the screen while its outer row has an update not yet painted.
 - `docs/writing-a-page.md`: rules for text boxes, `changed` and lists inside rows, each checked against a real view.
 - `spiderland`: `Slice::show`, with `Input` and `Inputs`. It makes a part of a render with a plain `fn` of what it reads, and keys
-  it on the same inputs, so none can be left out.
+  it on the same inputs, so none is left out by mistake.
 - `spiderland`: `Store::observe` and `Seen`, which show each intent just before it is reduced and each effect just before it is
   performed. The observer gets a reference, so nothing is copied and nothing needs `Debug`.
 - `spiderland`: `Intents::send_all` and `Store::send_all`, which send several intents as one batch. All of them are reduced before
@@ -85,5 +85,13 @@ tag makes a GitHub release from that version's section.
 
 - `spiderland`: `callbacks!` evaluates its view and store expressions once. It used to evaluate them again for each line, so
   an expression such as `ui.global::<Page>()` ran once per callback.
+- `spiderland`: `Slice::update`, `Slice::show` and `CheckedSlice::update` keep the new key only once the part has been shown. A
+  panic while showing used to leave the key, so the next call with the same key was skipped and the view kept what it had.
+- `spiderland`: the docs of `Background`, `wait`, `finish` and `EventLoop` say what is promised. Nothing the caller holds stops
+  `wait` or `finish`, but every result comes back through the event loop, and none arrives once that loop has stopped.
+  `Background` says how to stop an app without losing a write's outcome.
+- `spiderland`: `Tracked`'s docs say that it sees only changes made through `&mut`, so a `Cell` or a shared `Rc<RefCell<_>>`
+  inside one changes with no new version. `Slice::show` no longer claims that an input can't be left out of its key at all.
+- `spiderland`: the example of a window that closes once its editor has saved is on `Lifecycle`, where the API docs show it.
 
 [Unreleased]: https://github.com/sengokudaikon/spiderland/commits/main

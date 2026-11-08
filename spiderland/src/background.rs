@@ -13,7 +13,8 @@ use tokio::sync::oneshot;
 /// `slint::spawn_local`.
 pub trait EventLoop {
     /// Runs `future` on the UI thread, between events. It is called from the UI thread. Where no event loop can ever run, it may
-    /// drop the future, since nothing could show the result anyway.
+    /// drop the future, since nothing could show the result anyway. A future still waiting when the loop stops is never polled
+    /// again, so its result is lost too.
     fn spawn_local(future: impl Future<Output = ()> + 'static);
 }
 
@@ -51,7 +52,12 @@ impl Drop for Delivered {
 /// | [`finish`](Background::finish) | Is awaited on the UI thread | Goes to a closure, always. |
 /// | [`local`](Background::local) | Is awaited on the UI thread | Goes to a closure, unless the returned guard is dropped first. |
 ///
-/// Only `local` can be stopped. The others run to their end, and a result sent to a store that is gone goes nowhere.
+/// Only `local` can be stopped by its caller. The others run to their end, and a result sent to a store that is gone goes nowhere.
+///
+/// Every result comes back through the event loop. If that loop has stopped, or its [`EventLoop::spawn_local`] dropped the work, no
+/// result arrives, whichever method started it. So, to hear a write's outcome on the way out, keep the event loop running until
+/// the feature that wrote says it is done, as [`Lifecycle::CloseRequested`](crate::Lifecycle::CloseRequested) and
+/// [`CloseAnswer`](crate::CloseAnswer) let it. Quit the loop after that, and close the pool last.
 pub struct Background<L> {
     start: Arc<dyn Fn(Job) -> bool + Send + Sync>,
     /// Accepted work whose result hasn't been delivered yet.
@@ -89,7 +95,7 @@ impl<L: EventLoop> Background<L> {
     /// Runs `work` off the UI thread, then sends `then(result)` to `intents` on the UI thread. A panic reaches `then` as
     /// [`Panicked`], so each feature decides what it means. Call it from the UI thread.
     ///
-    /// Accepted work always runs to its end. If the store is gone by then, the result goes nowhere, so anything whose outcome
+    /// Accepted work runs to its end on the pool. If the store is gone by then, the result goes nowhere, so anything whose outcome
     /// must be recorded belongs to a store that lives as long as that record matters. Work the pool refuses, or lets go of
     /// before it starts, sends nothing back: the app is on its way out.
     pub fn run<T, I>(&self, intents: &Intents<I>, work: impl FnOnce() -> T + Send + 'static, then: impl FnOnce(Result<T, Panicked>) -> I + 'static)
@@ -120,8 +126,9 @@ impl<L: EventLoop> Background<L> {
     }
 
     /// Waits for `work` on the UI thread, then sends `then(result)` to `intents`: for an answer that arrives by itself, such as
-    /// a reply from a worker, with no pool thread held while it does. It always runs to its end, and the pool closing doesn't
-    /// stop it. Call it from the UI thread. A panic here is a panic on the UI thread, so `work` should only wait.
+    /// a reply from a worker, with no pool thread held while it does. Nothing the caller holds can stop it, and the pool closing
+    /// doesn't either. It ends with the event loop, though, as all of these do. Call it from the UI thread. A panic here is a
+    /// panic on the UI thread, so `work` should only wait.
     pub fn wait<T, I>(&self, intents: &Intents<I>, work: impl Future<Output = T> + 'static, then: impl FnOnce(T) -> I + 'static)
     where
         T: 'static,
@@ -136,8 +143,9 @@ impl<L: EventLoop> Background<L> {
         });
     }
 
-    /// Waits for `work` on the UI thread and hands its result to `then`, whatever else happens. Nothing can stop it, so it suits
-    /// a result that must always be heard, such as whether a write went through. Work that may be let go of goes through
+    /// Waits for `work` on the UI thread and hands its result to `then`. It returns no guard, so nothing the caller holds can stop
+    /// it, which suits a result that must be heard, such as whether a write went through. The event loop still has to be running
+    /// when the result comes: see [`Background`] for how to stop the app without losing it. Work that may be let go of goes through
     /// [`Background::local`]. Call it from the UI thread.
     pub fn finish<T: 'static>(&self, work: impl Future<Output = T> + 'static, then: impl FnOnce(T) + 'static) {
         let delivered = self.accepted();
@@ -163,7 +171,8 @@ impl<L: EventLoop> Background<L> {
         Delivered(self.pending.clone())
     }
 
-    /// Accepted work whose result hasn't been delivered yet, for a test to wait on.
+    /// Accepted work whose result hasn't been delivered yet, for a test to wait on. Work the event loop drops counts off too,
+    /// though nothing was delivered.
     pub fn pending(&self) -> usize {
         self.pending.load(Ordering::Acquire)
     }

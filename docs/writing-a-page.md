@@ -88,8 +88,9 @@ of it.
 
 **Slice keys**
 
-A `Slice` key that leaves out an input shows stale values. `Slice::show` can't leave one out, because its `fn` reads only what the
-key is made from. A function that reads through a whole editor can't be given its inputs one by one: keep its key beside it, and use
+A `Slice` key that leaves out an input shows stale values. `Slice::show` keeps one from being left out by mistake, because its `fn`
+can't capture: it reads what the key is made from. It can still read statics, and a `Tracked` sees only changes made through `&mut`,
+so keep a `Cell` or a shared `Rc<RefCell<_>>` out of one. A function that reads through a whole editor can't be given its inputs one by one: keep its key beside it, and use
 `CheckedSlice`, which fails a test when the key misses an input. It checks only under `spiderland`'s `testing` feature: turn that on
 from dev-dependencies, so a normal build doesn't make every value on every render.
 
