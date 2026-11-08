@@ -516,7 +516,9 @@ impl<F: Feature> Store<F> {
     }
 
     /// Runs `change` on the state directly, for a test or a capture to set up or look at a state. Nothing renders until the
-    /// next intent. A real feature's changes go through its reducer.
+    /// next intent. Only under the `testing` feature: a real feature's changes go through its reducer, and to read the state,
+    /// use [`Store::try_read`].
+    #[cfg(feature = "testing")]
     pub fn with_state<R>(&self, change: impl FnOnce(&mut F::State) -> R) -> R {
         change(&mut self.0.state.borrow_mut())
     }

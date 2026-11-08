@@ -10,7 +10,7 @@
 | `Intents::send_all`, `Store::send_all` | Send several intents as one batch, so the render and the effects come after all of them. |
 | `Store::ask` | Sends an intent and reads what it did, for a view callback that returns a value. |
 | `Store::try_read` | Answers a view's question from the state, for a pure callback that a binding calls. |
-| `Store::with_state` | Changes the state directly, for a test or a capture to set up. Nothing renders until the next intent. |
+| `Store::with_state` | Changes the state directly, for a test or a capture to set up. Nothing renders until the next intent. Behind the `testing` feature. |
 | `Feature::Output`, `Effects::emit` | Let a reducer tell whoever listens. `Never` is for a feature that tells no one. |
 | `Store::forward` | Turns one store's outputs into another store's intents. |
 | `Store::observe`, `Seen` | Shows each intent and effect as the store runs it, for a trail of what led to a fault. |

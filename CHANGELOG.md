@@ -63,6 +63,9 @@ tag makes a GitHub release from that version's section.
 - **Breaking:** `CheckedSlice` checks its key only under `spiderland`'s new `testing` feature, not in every debug build, so a
   normal build no longer makes every value on every render. Nothing fails to build. To keep the check in tests, add
   `spiderland = { ..., features = ["testing"] }` to the `[dev-dependencies]` of each package whose tests show such a slice.
+- **Breaking:** `Store::with_state` exists only under the `testing` feature, as a real feature's changes go through its reducer.
+  A test that calls it lists `spiderland = { ..., features = ["testing"] }` in its package's `[dev-dependencies]`. Library code
+  that called it sends an intent instead, and reads through `Store::try_read`.
 
 ### Removed
 
