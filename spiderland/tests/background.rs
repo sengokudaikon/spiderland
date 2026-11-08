@@ -377,7 +377,13 @@ fn stoppable_work_stops_with_its_subscription_even_while_the_store_hears_it() {
         shown: Rc::clone(&shown),
         returned: Arc::clone(&returned),
     };
-    let _store = Store::new(Exporting { running: true, ..Exporting::default() }, host);
+    let _store = Store::new(
+        Exporting {
+            running: true,
+            ..Exporting::default()
+        },
+        host,
+    );
     until("the work to stop and return", || returned.load(Ordering::SeqCst));
     until("nothing left to arrive", || background.pending() == 0);
     for _ in 0..5 {
@@ -385,7 +391,11 @@ fn stoppable_work_stops_with_its_subscription_even_while_the_store_hears_it() {
     }
     let state = shown.borrow();
     // Reports can merge, so the one that stopped the work may be past 3. It is the last one heard.
-    assert_eq!(state.reports.iter().filter(|&&done| done >= 3).count(), 1, "nothing arrived after the report that stopped it");
+    assert_eq!(
+        state.reports.iter().filter(|&&done| done >= 3).count(),
+        1,
+        "nothing arrived after the report that stopped it"
+    );
     assert!(state.reports.windows(2).all(|pair| pair[0] < pair[1]), "reports arrive in order, merged or not");
     assert!(state.result.is_none(), "what stopped work returns arrives nowhere");
 }

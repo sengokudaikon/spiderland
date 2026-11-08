@@ -116,7 +116,11 @@ fn what_a_wiring_is_sent_waits_for_the_start() {
     wiring.intents().send(Set::Theme(2));
     assert!(heard.borrow().is_empty(), "nothing runs before the start");
     let _settings = wiring.start();
-    assert_eq!(*heard.borrow(), [Set::Theme(2), Set::Saved], "in the order sent: before the start, then by the start's write");
+    assert_eq!(
+        *heard.borrow(),
+        [Set::Theme(2), Set::Saved],
+        "in the order sent: before the start, then by the start's write"
+    );
 }
 
 #[test]
