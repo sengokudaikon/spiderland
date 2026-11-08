@@ -11,10 +11,17 @@ license.workspace = true
 # subscriptions leaves it out. It needs a nightly compiler. Without it the crate builds on stable, and every feature names the
 # type.
 nightly = []
+# `testing`: what only tests want. `CheckedSlice` checks its key only under it. Turn it on from dev-dependencies, so a normal
+# build doesn't pay for the check.
+testing = []
 
 [dependencies]
 # Channels only, for work that comes back to the UI thread. No runtime: the app brings its own pool.
 tokio.workspace = true
+
+[dev-dependencies]
+# This crate's own tests use its `testing` feature.
+spiderland = { path = ".", features = ["testing"] }
 
 [lints]
 workspace = true

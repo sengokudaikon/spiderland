@@ -60,6 +60,9 @@ tag makes a GitHub release from that version's section.
   and `Waker` from `spiderland`. `spiderland` now depends on `tokio`'s channels, at the same pinned version.
 - **Breaking:** `Feature` requires `type Subscription`. On a nightly compiler, turn on `spiderland`'s `nightly` feature and change
   nothing else. On stable, a feature that wants no subscriptions adds `type Subscription = Never;`.
+- **Breaking:** `CheckedSlice` checks its key only under `spiderland`'s new `testing` feature, not in every debug build, so a
+  normal build no longer makes every value on every render. Nothing fails to build. To keep the check in tests, add
+  `spiderland = { ..., features = ["testing"] }` to the `[dev-dependencies]` of each package whose tests show such a slice.
 
 ### Removed
 

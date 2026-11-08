@@ -248,15 +248,19 @@ inputs!(A 0, B 1, C 2, D 3);
 inputs!(A 0, B 1, C 2, D 3, E 4);
 inputs!(A 0, B 1, C 2, D 3, E 4, F 5);
 
-/// A [`Slice`] that makes a value before showing it, and so can check itself. In a test build, whenever the key says nothing
-/// changed it makes the value anyway and panics if it differs from what is showing: a key missing an input fails there
-/// rather than showing stale values in a release, where the value is only made when the key changes.
+/// A [`Slice`] that makes a value before showing it, and so can check itself. Under the `testing` feature, whenever the key
+/// says nothing changed it makes the value anyway and panics if it differs from what is showing: a key missing an input fails
+/// there rather than showing stale values. Without the feature, the value is made only when the key changes.
+///
+/// Turn `testing` on from dev-dependencies, so that tests check and a normal build, debug or release, doesn't pay for it. The
+/// feature then applies only when the tests of a package that lists it are built, so each package whose tests show such a
+/// slice lists it.
 #[derive(Debug)]
 pub struct CheckedSlice<K, V> {
     key: Option<K>,
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "testing")]
     shown: Option<V>,
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(feature = "testing"))]
     shown: std::marker::PhantomData<V>,
 }
 
@@ -264,9 +268,9 @@ impl<K, V> Default for CheckedSlice<K, V> {
     fn default() -> Self {
         CheckedSlice {
             key: None,
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "testing")]
             shown: None,
-            #[cfg(not(debug_assertions))]
+            #[cfg(not(feature = "testing"))]
             shown: std::marker::PhantomData,
         }
     }
@@ -277,18 +281,18 @@ impl<K: PartialEq, V: PartialEq + Clone> CheckedSlice<K, V> {
     /// a failed check is.
     pub fn update(&mut self, name: &str, key: K, make: impl FnOnce() -> V, show: impl FnOnce(V)) {
         if self.key.as_ref() == Some(&key) {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "testing")]
             assert!(
                 self.shown.as_ref() == Some(&make()),
                 "the {name} slice's key is missing an input: it says nothing changed, and its value did"
             );
-            #[cfg(not(debug_assertions))]
+            #[cfg(not(feature = "testing"))]
             let _ = (name, make);
             return;
         }
         self.key = Some(key);
         let value = make();
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "testing")]
         {
             self.shown = Some(value.clone());
         }
@@ -311,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "testing")]
     #[should_panic(expected = "key is missing an input")]
     fn a_checked_slice_catches_a_key_that_misses_an_input() {
         let mut slice = CheckedSlice::default();

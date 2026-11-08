@@ -4019,6 +4019,7 @@ dependencies = [
 name = "spiderland"
 version = "0.1.0"
 dependencies = [
+ "spiderland",
  "tokio",
 ]
 
