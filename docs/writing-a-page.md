@@ -80,11 +80,12 @@ fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
 Work on the pool can't be stopped: `Background::run` runs to its end. For that, the reducer checks that an answer is for the query
 the state still holds.
 
-**Panics**
+**Work with no result**
 
-A panic in background work arrives as `Err(Panicked)`, and each feature decides what it means. `Panicked` is a
-`std::error::Error`, so `?` carries it into an app's own error. The panic then goes on to the app's pool, which can keep a record
-of it.
+Work on the pool that panics, that the pool refuses, or that the pool lets go of before it runs, arrives as `Err` of an `Error`
+that says which. Each feature decides what each means, and none leaves a page waiting for an answer that won't come. `Error` is a
+`std::error::Error`, so `?` carries it into an app's own error. A panic then goes on to the app's pool, which can keep a record of
+it.
 
 **Slice keys**
 

@@ -1,7 +1,7 @@
 //! Work that must not hold the UI thread. It runs on the app's pool and comes back on the event loop as an intent.
 
 use crate::wake::{Dropping, droppable};
-use crate::{Intents, Panicked};
+use crate::{Error, Intents};
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -22,12 +22,12 @@ pub trait EventLoop {
 pub type Job = Box<dyn FnOnce() + Send>;
 
 /// Tells the feature that its work panicked: only an unwinding drops this with the reply unsent.
-struct Reply<T>(Option<oneshot::Sender<Result<T, Panicked>>>);
+struct Reply<T>(Option<oneshot::Sender<Result<T, Error>>>);
 
 impl<T> Drop for Reply<T> {
     fn drop(&mut self) {
         if let Some(reply) = self.0.take() {
-            let _ = reply.send(Err(Panicked));
+            let _ = reply.send(Err(Error::Panicked));
         }
     }
 }
@@ -47,7 +47,7 @@ impl Drop for Delivered {
 ///
 /// | Method | The work | Its result |
 /// |---|---|---|
-/// | [`run`](Background::run) | Runs on the app's pool | Goes to the store as an intent. A panic arrives as [`Panicked`]. |
+/// | [`run`](Background::run) | Runs on the app's pool | Goes to the store as an intent, or why there is none as an [`Error`]. |
 /// | [`wait`](Background::wait) | Is awaited on the UI thread | Goes to the store as an intent. |
 /// | [`finish`](Background::finish) | Is awaited on the UI thread | Goes to a closure, always. |
 /// | [`local`](Background::local) | Is awaited on the UI thread | Goes to a closure, unless the returned guard is dropped first. |
@@ -82,8 +82,8 @@ impl<L> Clone for Background<L> {
 }
 
 impl<L: EventLoop> Background<L> {
-    /// `start` starts a job on the app's pool and says whether the pool took it. The app closes that pool on the way out, after
-    /// cancelling anything long. A panic in a job goes on to the pool once the feature has been told, so the pool can keep a record.
+    /// `start` starts a job on the app's pool and says whether the pool took it. A job it refuses, or lets go of before it runs,
+    /// comes back to its feature as an [`Error`]. The app closes that pool on the way out, after cancelling anything long. A panic in a job goes on to the pool once the feature has been told, so the pool can keep a record.
     pub fn new(start: impl Fn(Job) -> bool + Send + Sync + 'static) -> Background<L> {
         Background {
             start: Arc::new(start),
@@ -92,13 +92,15 @@ impl<L: EventLoop> Background<L> {
         }
     }
 
-    /// Runs `work` off the UI thread, then sends `then(result)` to `intents` on the UI thread. A panic reaches `then` as
-    /// [`Panicked`], so each feature decides what it means. Call it from the UI thread.
+    /// Runs `work` off the UI thread, then sends `then(result)` to `intents` on the UI thread. Call it from the UI thread.
+    ///
+    /// Each call sends one result. It is the work's own, or an [`Error`] saying why there is none: the work panicked, the pool
+    /// refused it, or the pool let go of it before it ran. A refusal is sent at once, and runs after the batch under way. Each
+    /// feature decides what each of them means, so a page doesn't stay loading for an answer that will never come.
     ///
     /// Accepted work runs to its end on the pool. If the store is gone by then, the result goes nowhere, so anything whose outcome
-    /// must be recorded belongs to a store that lives as long as that record matters. Work the pool refuses, or lets go of
-    /// before it starts, sends nothing back: the app is on its way out.
-    pub fn run<T, I>(&self, intents: &Intents<I>, work: impl FnOnce() -> T + Send + 'static, then: impl FnOnce(Result<T, Panicked>) -> I + 'static)
+    /// must be recorded belongs to a store that lives as long as that record matters.
+    pub fn run<T, I>(&self, intents: &Intents<I>, work: impl FnOnce() -> T + Send + 'static, then: impl FnOnce(Result<T, Error>) -> I + 'static)
     where
         T: Send + 'static,
         I: 'static,
@@ -112,6 +114,7 @@ impl<L: EventLoop> Background<L> {
             }
         });
         if !(self.start)(job) {
+            intents.send(then(Err(Error::Refused)));
             return;
         }
         let delivered = self.accepted();
@@ -119,9 +122,8 @@ impl<L: EventLoop> Background<L> {
         L::spawn_local(async move {
             let _delivered = delivered;
             // No reply: the pool let go of the job before it began.
-            if let Ok(result) = replied.await {
-                intents.send(then(result));
-            }
+            let result = replied.await.unwrap_or(Err(Error::Dropped));
+            intents.send(then(result));
         });
     }
 

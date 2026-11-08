@@ -24,10 +24,11 @@
 | `Feature::subscriptions`, `Host::subscribe` | The feature names what its state wants running, the host starts it, and the store stops it once it isn't wanted. |
 | `Subscriptions` | Keeps things running by key. The store uses it for a feature's subscriptions. |
 | `Background::new`, `Job` | Takes the app's way to start a `Job` on its pool, which says whether the pool took it. |
-| `Background::run` | Runs work on the app's pool and sends the result back as an intent. A panic arrives as `Err(Panicked)`. |
+| `Background::run` | Runs work on the app's pool and sends the result back as an intent. Work that panics, or that the pool refuses or lets go of, arrives as `Err` of an `Error`. |
+| `Error` | Why work on the pool has no result of its own: it panicked, or the pool refused it or let go of it. |
 | `Background::wait` | Awaits an answer on the UI thread, with no pool thread held, and sends it back as an intent. |
 | `Background::local` | Awaits work on the UI thread that can be dropped at any moment, even from inside its own result. `Dropping` is its guard. |
-| `Background::finish` | Awaits work on the UI thread whose result must always be heard. |
+| `Background::finish` | Awaits work on the UI thread that nothing the caller holds can stop, for a result that must be heard. |
 | `Background::pending` | Counts work whose result hasn't come back yet, for a test to wait on. |
 | `on_watch`, `on_wake` | Let a service on another thread tell a feature that something changed. `Listening` is their guard, and `on_wake`'s `Waker` fires it. |
 | `EventLoop` | The one thing `Background` and the listeners need from a toolkit: running a future on the UI thread. |

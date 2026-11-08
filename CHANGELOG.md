@@ -35,7 +35,6 @@ tag makes a GitHub release from that version's section.
 - `spiderland`: `Feature::Subscription`, `Feature::subscriptions` and `Host::subscribe`, so a feature says what runs while its state
   wants it, and `subscriptions` to test that with no host. After each batch's render the store starts new keys and drops the ones
   no longer wanted, whether or not the host rendered anything.
-- `spiderland`: `Panicked` implements `Display` and `std::error::Error`, so `?` carries it into an app's own error.
 - `spiderland`, `spiderland-slint`: `Dropping`, `Listening`, and the timers `every` and `after` return, are `#[must_use]`. A guard
   written as a plain statement is dropped at once and stops what it guards before it runs, so that now warns.
 - All crates: every public type implements `Debug`, and every public item has docs. `missing_docs` and
@@ -50,6 +49,11 @@ tag makes a GitHub release from that version's section.
 
 ### Changed
 
+- **Breaking:** `Panicked` becomes `Error`, a `#[non_exhaustive]` enum of why work on the pool has no result of its own:
+  `Panicked`, `Refused` or `Dropped`. `Background::run` used to send nothing when the pool refused a job or let go of it before it
+  ran, which could leave a page loading for good. Now each call sends one result. Its `then` takes `Result<T, Error>`. Where a
+  feature named `Panicked`, write `Error`. Match `Err(_)` to handle every reason alike, and build `Err(Error::Panicked)` in tests.
+  `Error` implements `Display` and `std::error::Error`, so `?` carries it into an app's own error.
 - `tokio` is no longer pinned exactly. The crates take `tokio` 1.53 or any later 1.x, so an app can move its own `tokio` on its own.
 - **Breaking:** `Feature` requires `type Output`. A feature that tells no one adds `type Output = Never;`. Its `reduce` signature can
   stay as it is.

@@ -98,6 +98,7 @@
 //!   [`Effects::scoped`]. A scope that ends is an `Option` going back to `None`.
 
 mod background;
+mod error;
 mod lifecycle;
 mod macros;
 mod pulse;
@@ -108,9 +109,10 @@ mod tracked;
 mod wake;
 
 pub use background::{Background, EventLoop, Job};
+pub use error::Error;
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::Pulse;
-pub use store::{Effects, Feature, Host, Intents, Never, Panicked, Seen, Step, Store, start, step, subscriptions};
+pub use store::{Effects, Feature, Host, Intents, Never, Seen, Step, Store, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
 pub use test_store::TestStore;
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};

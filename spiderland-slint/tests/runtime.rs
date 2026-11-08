@@ -1,6 +1,6 @@
 //! Background work and timers against a real Slint event-loop proxy. One test: Slint's platform is set once per process.
 
-use spiderland::{Dropping, Effects, Feature, Host, Intents, Listening, Never, Panicked, Store};
+use spiderland::{Dropping, Effects, Error, Feature, Host, Intents, Listening, Never, Store};
 use spiderland_slint::testing::{Headless, advance, settle, until};
 use spiderland_slint::{Background, after, every, on_wake, on_watch};
 use std::any::Any;
@@ -20,7 +20,7 @@ enum Effect {
 
 enum Intent {
     Run(fn() -> i32),
-    Finished(Result<i32, Panicked>),
+    Finished(Result<i32, Error>),
     Watch(bool),
     Tick,
     Edit,
@@ -29,7 +29,7 @@ enum Intent {
 
 #[derive(Default)]
 struct State {
-    results: Vec<Result<i32, Panicked>>,
+    results: Vec<Result<i32, Error>>,
     watching: bool,
     ticks: i32,
     edits: u32,
@@ -78,7 +78,7 @@ impl Feature for Probe {
 
 #[derive(Default)]
 struct Seen {
-    results: Vec<Result<i32, Panicked>>,
+    results: Vec<Result<i32, Error>>,
     ticks: i32,
     settled: u32,
     settles: u32,
@@ -143,13 +143,13 @@ fn work_and_timers_come_back_as_intents_on_the_ui_thread() {
     // A panic reaches the feature as a value, and the store goes on working.
     store.send(Intent::Run(|| panic!("a fault in the work, expected by this test")));
     until("background work", || background.pending() == 0);
-    assert_eq!(seen.borrow().results, [Ok(7), Err(Panicked)]);
+    assert_eq!(seen.borrow().results, [Ok(7), Err(Error::Panicked)]);
     until("the panic to reach the pool", || panics.load(Ordering::SeqCst) == 1);
     store.send(Intent::Run(|| 8));
     until("background work", || background.pending() == 0);
-    assert_eq!(seen.borrow().results, [Ok(7), Err(Panicked), Ok(8)]);
+    assert_eq!(seen.borrow().results, [Ok(7), Err(Error::Panicked), Ok(8)]);
 
-    // Work the pool refuses, or lets go of before it starts, sends nothing back.
+    // Work the pool refuses, or lets go of before it starts, still comes back, as the reason there is no result.
     let intents = store.intents();
     let refusing = Background::new(|_| false);
     refusing.run(&intents, || 1, Intent::Finished);
@@ -161,7 +161,7 @@ fn work_and_timers_come_back_as_intents_on_the_ui_thread() {
     letting_go.run(&intents, || 2, Intent::Finished);
     until("the job let go of", || letting_go.pending() == 0);
     settle();
-    assert_eq!(seen.borrow().results, [Ok(7), Err(Panicked), Ok(8)]);
+    assert_eq!(seen.borrow().results, [Ok(7), Err(Error::Panicked), Ok(8), Err(Error::Refused), Err(Error::Dropped)]);
 
     // An answer awaited on the UI thread counts until it is delivered, and comes back as an intent.
     let (answer, answered) = oneshot::channel();

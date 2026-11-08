@@ -1,6 +1,6 @@
 //! `Background` and the listeners on a loop polled by hand, with no toolkit: `EventLoop` is all they need from one.
 
-use spiderland::{Background, Effects, EventLoop, Feature, Host, Intents, Never, Panicked, Store, on_wake, subscriptions};
+use spiderland::{Background, Effects, Error, EventLoop, Feature, Host, Intents, Never, Store, on_wake, subscriptions};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::pin::Pin;
@@ -45,13 +45,13 @@ fn until(what: &str, done: impl Fn() -> bool) {
 struct Probe;
 
 enum Intent {
-    Finished(Result<i32, Panicked>),
+    Finished(Result<i32, Error>),
     Woken,
 }
 
 #[derive(Clone, Default)]
 struct State {
-    results: Vec<Result<i32, Panicked>>,
+    results: Vec<Result<i32, Error>>,
     wakes: i32,
 }
 
@@ -97,7 +97,7 @@ fn work_and_wakes_come_back_on_any_event_loop() {
     until("background work", || background.pending() == 0);
     background.run(&intents, || panic!("a fault in the work, expected by this test"), Intent::Finished);
     until("background work", || background.pending() == 0);
-    assert_eq!(shown.borrow().results, [Ok(7), Err(Panicked)]);
+    assert_eq!(shown.borrow().results, [Ok(7), Err(Error::Panicked)]);
 
     // Work let go of before it finishes never hands over its result.
     let (answer, answered) = oneshot::channel::<i32>();
@@ -115,6 +115,26 @@ fn work_and_wakes_come_back_on_any_event_loop() {
     turn();
     std::thread::spawn(move || waker.wake()).join().unwrap();
     until("the wake", || shown.borrow().wakes == 1);
+}
+
+#[test]
+fn work_the_pool_refuses_or_lets_go_of_still_comes_back() {
+    let shown = Rc::default();
+    let store = Store::new(State::default(), Shown(Rc::clone(&shown)));
+    let intents = store.intents();
+
+    let refusing = Background::<ByHand>::new(|_| false);
+    refusing.run(&intents, || 7, Intent::Finished);
+    assert_eq!(shown.borrow().results, [Err(Error::Refused)], "a refusal comes back at once");
+    assert_eq!(refusing.pending(), 0);
+
+    let letting_go = Background::<ByHand>::new(|job| {
+        drop(job);
+        true
+    });
+    letting_go.run(&intents, || 7, Intent::Finished);
+    until("the work let go of", || letting_go.pending() == 0);
+    assert_eq!(shown.borrow().results, [Err(Error::Refused), Err(Error::Dropped)]);
 }
 
 /// A search whose load is a subscription keyed on its query, so a new query drops the load for the old one.
