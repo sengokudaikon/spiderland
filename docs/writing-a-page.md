@@ -1,6 +1,7 @@
 # Writing a page
 
-A page has five parts. A complete small feature is in the `spiderland` crate's docs.
+A page has five parts. A complete small feature is in the `spiderland` crate's docs. A whole app, with its stores, hosts, views and
+tests, is in `showcase/`.
 
 ## 1. Feature
 
