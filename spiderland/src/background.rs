@@ -333,7 +333,7 @@ pub struct Stopping {
 }
 
 impl Stopping {
-    /// True once the work is over, whether it finished or the pool let go of it, so nothing of it is left to arrive.
+    /// True once nothing of the work is left to arrive: it finished, the pool let go of it, or the pool refused it.
     pub fn is_finished(&self) -> bool {
         self.guard.is_closed()
     }
