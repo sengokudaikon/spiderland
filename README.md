@@ -76,12 +76,7 @@ spiderland = { git = "https://github.com/sengokudaikon/spiderland" }
 spiderland-slint = { git = "https://github.com/sengokudaikon/spiderland" }
 ```
 
-The crates build on stable. On a nightly compiler, turn on `spiderland`'s `nightly` feature, and a feature that wants no
-subscriptions can leave out `type Subscription = Never;`:
-
-```toml
-spiderland = { git = "https://github.com/sengokudaikon/spiderland", features = ["nightly"] }
-```
+The crates build on stable.
 
 `spiderland-slint` pins `slint = "=1.18.1"`, and your app has to build against the same version. Both crates take `tokio` 1.53 or
 any later 1.x, for its channels.

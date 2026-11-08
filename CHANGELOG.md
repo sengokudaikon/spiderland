@@ -35,7 +35,6 @@ tag makes a GitHub release from that version's section.
 - `spiderland`: `Feature::Subscription`, `Feature::subscriptions` and `Host::subscribe`, so a feature says what runs while its state
   wants it, and `subscriptions` to test that with no host. After each batch's render the store starts new keys and drops the ones
   no longer wanted, whether or not the host rendered anything.
-- `spiderland`: a `nightly` feature, off by default, under which `type Subscription` defaults to `Never`.
 - `spiderland`: `Panicked` implements `Display` and `std::error::Error`, so `?` carries it into an app's own error.
 - `spiderland`, `spiderland-slint`: `Dropping`, `Listening`, and the timers `every` and `after` return, are `#[must_use]`. A guard
   written as a plain statement is dropped at once and stops what it guards before it runs, so that now warns.
@@ -59,8 +58,7 @@ tag makes a GitHub release from that version's section.
   one thing from a toolkit, a way to run a future on the UI thread, and the new `EventLoop` trait names it. `spiderland-slint`
   keeps `Background`, `on_watch` and `on_wake` on its `Slint` loop, so those paths stay. Import `Job`, `Dropping`, `Listening`
   and `Waker` from `spiderland`. `spiderland` now depends on `tokio`'s channels.
-- **Breaking:** `Feature` requires `type Subscription`. On a nightly compiler, turn on `spiderland`'s `nightly` feature and change
-  nothing else. On stable, a feature that wants no subscriptions adds `type Subscription = Never;`.
+- **Breaking:** `Feature` requires `type Subscription`. A feature that wants no subscriptions adds `type Subscription = Never;`.
 - **Breaking:** `CheckedSlice` checks its key only under `spiderland`'s new `testing` feature, not in every debug build, so a
   normal build no longer makes every value on every render. Nothing fails to build. To keep the check in tests, add
   `spiderland = { ..., features = ["testing"] }` to the `[dev-dependencies]` of each package whose tests show such a slice.
@@ -76,6 +74,9 @@ tag makes a GitHub release from that version's section.
 
 ### Removed
 
+- **Breaking:** `spiderland`'s `nightly` feature, which let a feature leave out `type Subscription` on a nightly compiler. It saved
+  one line per feature, and cost a second lint and test run. Drop `features = ["nightly"]`, and add `type Subscription = Never;`
+  to each feature that left it out.
 - **Breaking:** `spiderland-phrases`, `spiderland-phrases-build`, and `spiderland-slint`'s `select_language`. The framework has
   no words of its own, so how an app shows and translates its words is the app's. An app that used them keeps their code as
   its own crate, or takes a translation library. Where it called `select_language`, it picks the language itself: read the

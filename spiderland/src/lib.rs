@@ -97,8 +97,6 @@
 //! - **Scope machinery.** A scope is a state inside a state: a parent's `reduce` hands the child its state, intent and
 //!   [`Effects::scoped`]. A scope that ends is an `Option` going back to `None`.
 
-#![cfg_attr(feature = "nightly", feature(associated_type_defaults))]
-
 mod background;
 mod lifecycle;
 mod macros;

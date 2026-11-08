@@ -18,12 +18,7 @@ pub trait Feature: 'static {
     /// What this feature tells whoever listens, through [`Store::forward`]. A feature that tells no one says [`Never`].
     type Output: 'static;
     /// Something that runs for as long as the state wants it, such as a timer or a watch on a service, as a key the host
-    /// starts in [`Host::subscribe`]. With the `nightly` feature it is [`Never`] unless a feature says otherwise.
-    #[cfg(feature = "nightly")]
-    type Subscription: PartialEq + 'static = Never;
-    /// Something that runs for as long as the state wants it, such as a timer or a watch on a service, as a key the host
     /// starts in [`Host::subscribe`]. A feature that wants none says [`Never`].
-    #[cfg(not(feature = "nightly"))]
     type Subscription: PartialEq + 'static;
 
     /// Handles one intent: changes `state`, and lists in `effects` the work to do and what to tell others. It touches nothing
@@ -1341,22 +1336,6 @@ mod tests {
         assert_eq!(subscriptions::<Watcher>(&(true, true)), [Watch::Ticks, Watch::Saves]);
         assert_eq!(subscriptions::<Watcher>(&(false, true)), [Watch::Saves]);
         assert!(subscriptions::<Counter>(&0).is_empty(), "a feature that doesn't say otherwise wants nothing");
-    }
-
-    /// The only place the default is used: every other feature here names its type, so the crate builds on stable.
-    #[cfg(feature = "nightly")]
-    #[test]
-    fn with_nightly_a_feature_that_wants_nothing_leaves_its_subscription_type_out() {
-        struct Plain;
-        impl Feature for Plain {
-            type State = ();
-            type Intent = ();
-            type Effect = ();
-            type Output = Never;
-            fn reduce(_: &mut (), (): (), _: &mut Effects<()>) {}
-        }
-        assert!(subscriptions::<Plain>(&()).is_empty());
-        TestStore::<Plain>::new(()).send(());
     }
 
     #[test]

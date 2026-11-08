@@ -7,10 +7,6 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-# `nightly`: `Feature::Subscription` defaults to `Never`, through associated type defaults, so a feature that wants no
-# subscriptions leaves it out. It needs a nightly compiler. Without it the crate builds on stable, and every feature names the
-# type.
-nightly = []
 # `testing`: what only tests want. `CheckedSlice` checks its key only under it, and `Store::with_state` exists only under it. Turn
 # it on from dev-dependencies, so a normal build doesn't pay for the check and can't change a store's state behind its reducer.
 testing = []

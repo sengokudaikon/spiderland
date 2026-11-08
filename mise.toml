@@ -2,10 +2,9 @@
 # Rust nightly is selected by rust-toolchain.toml.
 
 [tasks.lint]
-description = "Clippy over every target, warnings as errors, over spiderland's nightly feature, and over its library without testing"
+description = "Clippy over every target, warnings as errors, and over spiderland's library without testing"
 run = [
     "cargo clippy --workspace --all-targets --offline -- -D warnings",
-    "cargo clippy -p spiderland --all-targets --features nightly --offline -- -D warnings",
     # Test targets turn `testing` on, through the dev-dependency. The library alone is built as an app's normal build is.
     "cargo clippy -p spiderland --lib --offline -- -D warnings",
 ]
@@ -19,8 +18,8 @@ description = "Fail if anything is unformatted"
 run = "cargo fmt --all --check"
 
 [tasks.test]
-description = "Every test of the workspace, and spiderland's with its nightly feature"
-run = ["cargo test --workspace --offline", "cargo test -p spiderland --features nightly --offline"]
+description = "Every test of the workspace"
+run = ["cargo test --workspace --offline"]
 
 [tasks.doc]
 description = "Build the docs, warnings as errors"
