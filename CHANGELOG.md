@@ -66,6 +66,12 @@ tag makes a GitHub release from that version's section.
 - **Breaking:** `Store::with_state` exists only under the `testing` feature, as a real feature's changes go through its reducer.
   A test that calls it lists `spiderland = { ..., features = ["testing"] }` in its package's `[dev-dependencies]`. Library code
   that called it sends an intent instead, and reads through `Store::try_read`.
+- **Breaking:** `Closing` knows which child answered. A child that answers twice is heard once, an answer from a child not
+  asked changes nothing, and `hear` returns the result only for the answer that completes the wait. `Closing::asking` takes
+  the children's keys, and `Closing::hear` the key of the child answering. Where a parent asked `Closing::asking(n)`, ask
+  `Closing::asking(0..n)`, and have each child's answer carry its index to `hear(child, answer)`. `Closing` is no longer `Copy`.
+- **Breaking:** `Lifecycle` has `CloseCalledOff`, for a parent to tell its children that the window stays after it asked to
+  close, so a child that stopped something to close starts it again. A `match` on `Lifecycle` needs an arm for it.
 
 ### Removed
 

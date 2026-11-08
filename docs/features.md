@@ -14,7 +14,7 @@
 | `Feature::Output`, `Effects::emit` | Let a reducer tell whoever listens. `Never` is for a feature that tells no one. |
 | `Store::forward` | Turns one store's outputs into another store's intents. |
 | `Store::observe`, `Seen` | Shows each intent and effect as the store runs it, for a trail of what led to a fault. |
-| `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, and ask whether they can close. |
+| `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, ask whether they can close, and tell them when the window stays after all. |
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
 | `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |
