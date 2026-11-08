@@ -51,13 +51,14 @@ tag makes a GitHub release from that version's section.
 
 ### Changed
 
+- `tokio` is no longer pinned exactly. The crates take `tokio` 1.53 or any later 1.x, so an app can move its own `tokio` on its own.
 - **Breaking:** `Feature` requires `type Output`. A feature that tells no one adds `type Output = Never;`. Its `reduce` signature can
   stay as it is.
 - **Breaking:** `step` returns `Step { effects, outputs }`. Where a test used the result as a list of effects, read `.effects`.
 - **Breaking:** `Background`, `Job`, `Dropping`, `Listening`, `Waker`, `on_watch` and `on_wake` move to `spiderland`. They need
   one thing from a toolkit, a way to run a future on the UI thread, and the new `EventLoop` trait names it. `spiderland-slint`
   keeps `Background`, `on_watch` and `on_wake` on its `Slint` loop, so those paths stay. Import `Job`, `Dropping`, `Listening`
-  and `Waker` from `spiderland`. `spiderland` now depends on `tokio`'s channels, at the same pinned version.
+  and `Waker` from `spiderland`. `spiderland` now depends on `tokio`'s channels.
 - **Breaking:** `Feature` requires `type Subscription`. On a nightly compiler, turn on `spiderland`'s `nightly` feature and change
   nothing else. On stable, a feature that wants no subscriptions adds `type Subscription = Never;`.
 - **Breaking:** `CheckedSlice` checks its key only under `spiderland`'s new `testing` feature, not in every debug build, so a

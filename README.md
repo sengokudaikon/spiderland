@@ -83,8 +83,8 @@ subscriptions can leave out `type Subscription = Never;`:
 spiderland = { git = "https://github.com/sengokudaikon/spiderland", features = ["nightly"] }
 ```
 
-`spiderland` pins `tokio = "=1.53.3"`, and `spiderland-slint` also pins `slint = "=1.18.1"`. Your app has to build against the same
-versions.
+`spiderland-slint` pins `slint = "=1.18.1"`, and your app has to build against the same version. Both crates take `tokio` 1.53 or
+any later 1.x, for its channels.
 
 ## Docs
 
