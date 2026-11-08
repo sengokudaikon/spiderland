@@ -16,8 +16,8 @@ const ROUNDS: usize = 100;
 /// - **Renders** are kept as what `show` makes of each state, the first render included, for
 ///   [`take_renders`](TestStore::take_renders). [`TestStore::new`] keeps `()`, which counts them.
 /// - **Subscriptions** start nothing. [`is_running`](TestStore::is_running) says whether the store has started a key.
-/// - **Outputs** go only where the test forwards them through [`store`](TestStore::store), as in an app: to another
-///   `TestStore`, say. What a reducer emits is tested with [`step`](crate::step).
+/// - **Outputs** are kept for [`take_outputs`](TestStore::take_outputs), once whatever the test forwards them to through
+///   [`store`](TestStore::store) has heard them. Unlike an effect, one left untaken doesn't fail the test.
 ///
 /// An effect's answer is the intent its work would send. Sent from the test, it runs as the next batch, as an answer from the
 /// pool would. No bound is put on the feature's types, so an effect is checked by matching on it.
@@ -66,11 +66,12 @@ const ROUNDS: usize = 100;
 /// ```
 pub struct TestStore<F: Feature, R = ()> {
     store: Store<F>,
-    kept: Rc<RefCell<Kept<F::Effect, R>>>,
+    kept: Rc<RefCell<Kept<F, R>>>,
 }
 
-struct Kept<E, R> {
-    effects: Vec<E>,
+struct Kept<F: Feature, R> {
+    effects: Vec<F::Effect>,
+    outputs: Vec<F::Output>,
     renders: Vec<R>,
 }
 
@@ -79,7 +80,7 @@ type Show<S, R> = Box<dyn FnMut(&S) -> R>;
 
 /// The host under a [`TestStore`].
 struct Keeping<F: Feature, R> {
-    kept: Rc<RefCell<Kept<F::Effect, R>>>,
+    kept: Rc<RefCell<Kept<F, R>>>,
     show: Show<F::State, R>,
 }
 
@@ -111,16 +112,18 @@ impl<F: Feature, R: 'static> TestStore<F, R> {
     pub fn rendering(state: F::State, show: impl FnMut(&F::State) -> R + 'static) -> Self {
         let kept = Rc::new(RefCell::new(Kept {
             effects: Vec::new(),
+            outputs: Vec::new(),
             renders: Vec::new(),
         }));
         let host = Keeping::<F, R> {
             kept: Rc::clone(&kept),
             show: Box::new(show),
         };
-        TestStore {
-            store: Store::new(state, host),
-            kept,
-        }
+        // `start` can't emit, and the host answers nothing as the store is built, so no output goes out before this.
+        let store = Store::new(state, host);
+        let keeping = Rc::clone(&kept);
+        store.keep_outputs(move |output| keeping.borrow_mut().outputs.push(output));
+        TestStore { store, kept }
     }
 
     /// Sends `intent`, as [`Store::send`] does.
@@ -162,6 +165,12 @@ impl<F: Feature, R: 'static> TestStore<F, R> {
         }
     }
 
+    /// What the store told others since the outputs were last taken, in order. Each goes out after its batch's render and
+    /// effects, as in an app.
+    pub fn take_outputs(&self) -> Vec<F::Output> {
+        std::mem::take(&mut self.kept.borrow_mut().outputs)
+    }
+
     /// What `show` made of each state rendered since the renders were last taken, in order.
     pub fn take_renders(&self) -> Vec<R> {
         std::mem::take(&mut self.kept.borrow_mut().renders)
@@ -199,6 +208,7 @@ impl<F: Feature, R> fmt::Debug for TestStore<F, R> {
         f.debug_struct("TestStore")
             .field("feature", &type_name::<F>())
             .field("waiting", &kept.effects.len())
+            .field("outputs", &kept.outputs.len())
             .field("renders", &kept.renders.len())
             .finish_non_exhaustive()
     }
@@ -259,6 +269,22 @@ mod tests {
         }
     }
 
+    /// Writes each number it is sent, and tells others of it.
+    struct Teller;
+
+    impl Feature for Teller {
+        type State = ();
+        type Intent = i32;
+        type Effect = Effect;
+        type Output = i32;
+        type Subscription = Never;
+
+        fn reduce(_: &mut (), number: i32, effects: &mut Effects<Effect, i32>) {
+            effects.push(Effect::Write(number));
+            effects.emit(number);
+        }
+    }
+
     #[test]
     fn effects_wait_for_the_test_and_its_answers_run_as_the_next_batch() {
         let store = TestStore::<Saver, _>::rendering(State::default(), |state| (state.count, state.saved));
@@ -298,6 +324,27 @@ mod tests {
         let store = TestStore::<Saver>::new(State { count: 3, ..State::default() });
         assert_eq!(store.take_effects(), [Effect::Write(3)]);
         assert_eq!(store.take_renders().len(), 1);
+    }
+
+    #[test]
+    fn outputs_are_kept_in_order_and_one_left_untaken_fails_nothing() {
+        let store = TestStore::<Teller>::new(());
+        store.send_all([1, 2]);
+        assert_eq!(store.take_outputs(), [1, 2]);
+        assert!(store.take_outputs().is_empty(), "taken once");
+        store.send(3);
+        store.answer(|_| []);
+    }
+
+    #[test]
+    fn an_output_forwarded_to_another_store_is_kept_too() {
+        let teller = TestStore::<Teller>::new(());
+        let saver = TestStore::<Saver>::new(State::default());
+        teller.store().forward(&saver.store().intents(), |number| Intent::Add(*number));
+        teller.send(2);
+        assert_eq!(saver.read(|state| state.count), 2);
+        assert_eq!(teller.take_outputs(), [2]);
+        assert_eq!(teller.take_effects(), [Effect::Write(2)]);
     }
 
     #[test]

@@ -332,6 +332,9 @@ type Listener<O> = Rc<dyn Fn(&O) -> bool>;
 
 type Observer<F> = Rc<dyn Fn(Seen<'_, F>)>;
 
+/// Takes an output once every listener has heard it.
+type Keeper<O> = Box<dyn FnMut(O)>;
+
 struct Inner<F: Feature> {
     state: RefCell<F::State>,
     /// Declared before the host, so what runs stops before the host goes.
@@ -345,6 +348,8 @@ struct Inner<F: Feature> {
     /// Replaced whole when one is added or ends, so telling them costs no copy of the list. Observers likewise.
     listeners: RefCell<Rc<[Listener<F::Output>]>>,
     observers: RefCell<Rc<[Observer<F>]>>,
+    /// Set only by a [`TestStore`](crate::TestStore), to keep the outputs. Any other store lets each go once it is told.
+    keeper: RefCell<Option<Keeper<F::Output>>>,
     draining: Cell<bool>,
     /// Holds only a weak reference to this store.
     intents: Intents<F::Intent>,
@@ -381,6 +386,7 @@ impl<F: Feature> Store<F> {
             outputs: RefCell::new(VecDeque::new()),
             listeners: RefCell::new(Rc::from(Vec::new())),
             observers: RefCell::new(Rc::from(Vec::new())),
+            keeper: RefCell::new(None),
             draining: Cell::new(false),
             intents: Intents(Rc::new(this.clone())),
         });
@@ -521,6 +527,11 @@ impl<F: Feature> Store<F> {
         self.0.state.try_borrow().ok().map(|state| read(&state))
     }
 
+    /// Hands each output to `keep` once every listener has heard it, for a [`TestStore`](crate::TestStore) to keep them.
+    pub(crate) fn keep_outputs(&self, keep: impl FnMut(F::Output) + 'static) {
+        *self.0.keeper.borrow_mut() = Some(Box::new(keep));
+    }
+
     /// Whether the store has started `key` for the state and not yet stopped it.
     pub(crate) fn is_running(&self, key: &F::Subscription) -> bool {
         self.0.subscriptions.borrow().contains(key)
@@ -624,6 +635,9 @@ impl<F: Feature> Inner<F> {
                     let mut kept = self.listeners.borrow_mut();
                     *kept = kept.iter().filter(|kept| !Rc::ptr_eq(kept, listener)).cloned().collect();
                 }
+            }
+            if let Some(keep) = self.keeper.borrow_mut().as_mut() {
+                keep(output);
             }
         }
     }

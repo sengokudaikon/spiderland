@@ -49,7 +49,7 @@ Put it in the crate with the window.
 - Test reducer rules with `step`, with no window.
 - Test a flow across effects with `TestStore`, with no window either. Send intents, then take each effect, or `answer` it with
   the intent its work would send. An effect left waiting fails the test. `TestStore::rendering` keeps what `present` makes of
-  each render.
+  each render, and `take_outputs` gives what the feature told others.
 - Test behaviour across the view with `spiderland_slint::testing`: the real window on real background work.
 
 ## Watch out for
