@@ -1,6 +1,6 @@
 # spiderland
 
-One-way UI state for Rust desktop apps, and translatable UI text. The core has no toolkit in it. Slint support is a separate crate.
+One-way UI state for Rust desktop apps. The core has no toolkit in it. Slint support is a separate crate.
 
 ```text
 view callback ─┐
@@ -61,12 +61,10 @@ The `spiderland` crate docs add a `Host` and a `Store` to this.
 | Crate | What it is | Depends on |
 |---|---|---|
 | `spiderland` | One-way UI state | `tokio`'s channels |
-| `spiderland-slint` | What a Slint host needs | `spiderland`, `spiderland-phrases`, Slint, `tokio`'s channels |
-| `spiderland-phrases` | Words and numbers, ready for translation | `thiserror`, and one Windows call |
-| `spiderland-phrases-build` | Build-time catalogs and the gettext template | `rspolib`, `proc-macro2`, `syn` and `thiserror` |
+| `spiderland-slint` | What a Slint host needs | `spiderland`, Slint, `tokio`'s channels |
 
-Feature crates take `spiderland` and `spiderland-phrases`, and stay free of Slint. The framework creates no tasks: the app gives
-`Background` a way to start a job on its own pool.
+Feature crates take `spiderland` and stay free of Slint. The framework creates no tasks: the app gives `Background` a way to
+start a job on its own pool. It has no words of its own either: what a page shows, and how it is translated, is the app's.
 
 ## Install
 
@@ -92,7 +90,6 @@ versions.
 
 - [Features](docs/features.md): everything the crates provide.
 - [Writing a page](docs/writing-a-page.md): a feature, its host and its view, step by step.
-- [Translation](docs/translation.md): words in views and in Rust, and how they reach translators.
 - [Changelog](CHANGELOG.md): what changed in each version, and what a breaking change asks of you.
 
 ## License

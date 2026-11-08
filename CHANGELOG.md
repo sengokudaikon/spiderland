@@ -15,9 +15,7 @@ tag makes a GitHub release from that version's section.
 
 - `spiderland`: `Feature`, `Host` and `Store` for one-way UI state, with `Tracked`, `Slice`, `CheckedSlice`, `Subscriptions`, `step`
   and `callbacks!`.
-- `spiderland-slint`: `Background`, `every`, `after`, `on_watch`, `on_wake`, `Rows`, `select_language` and `testing`.
-- `spiderland-phrases`: `phrases!`, `Phrase`, `Plural`, `Translations` and `locale`.
-- `spiderland-phrases-build`: `bundle_catalogs` and `Template`.
+- `spiderland-slint`: `Background`, `every`, `after`, `on_watch`, `on_wake`, `Rows` and `testing`.
 - `spiderland`: `Feature::Output`, `Effects::emit` and `Store::forward`, so a feature can tell others something. An output goes out
   after its batch's render and effects, and one emitted before there is a listener reaches no one.
 - `spiderland`: `Feature::start`, which sets up the first state and asks for effects before the first render, and `start` to test it.
@@ -61,30 +59,17 @@ tag makes a GitHub release from that version's section.
   and `Waker` from `spiderland`. `spiderland` now depends on `tokio`'s channels, at the same pinned version.
 - **Breaking:** `Feature` requires `type Subscription`. On a nightly compiler, turn on `spiderland`'s `nightly` feature and change
   nothing else. On stable, a feature that wants no subscriptions adds `type Subscription = Never;`.
-- **Breaking:** `spiderland-slint`'s `select_language` returns `Result<(), spiderland_phrases::Error>`, and
-  `Translations::new` fails with `spiderland_phrases::Error` rather than a `String`. Handle the result where `select_language`
-  is called, for example with `expect`, beside a test that runs `Translations::new` on the same catalogs. `spiderland-phrases`
-  now depends on `thiserror`.
-- **Breaking:** `spiderland-phrases-build`'s `Template::check` and `Template::write` fail with `spiderland_phrases_build::Error`
-  rather than a `String`. Its cases say which file and what went wrong, and it is `#[non_exhaustive]`. Where a caller joins it
-  with `String` errors, add `.map_err(|error| error.to_string())` to the call.
 
 ### Removed
 
-- **Breaking:** `spiderland-phrases`: `list` and `Conjunction`, the only words the framework shipped. An app's template now
-  collects only the app's own sources. An app that joins lists writes that itself, and keeps the translations it has by giving
-  its phrases the same English and contexts.
+- **Breaking:** `spiderland-phrases`, `spiderland-phrases-build`, and `spiderland-slint`'s `select_language`. The framework has
+  no words of its own, so how an app shows and translates its words is the app's. An app that used them keeps their code as
+  its own crate, or takes a translation library. Where it called `select_language`, it picks the language itself: read the
+  user's locale, choose the catalog for it, select that for the Rust words, and call `slint::select_bundled_translation` for the
+  views. `spiderland-slint` no longer depends on `sys-locale`.
 
 ### Fixed
 
-- `spiderland-phrases-build`: `Template` reads Rust sources as Rust's tokens. It used to stop reading a file at its first
-  `#[cfg(test)]` line, so a `#[cfg(test)] mod x;` near the top hid every phrase below it from translators. It now leaves out only
-  the item under that attribute. A comment or a string that mentions `Phrase::new` no longer counts, and escapes such as `\x41`
-  read as Rust reads them. A template that lost phrases gains them back: run the task that writes it.
-- `spiderland-slint`: `select_language` no longer hides a catalog it can't read. It used to drop the error and show every language
-  in English.
-- `spiderland-phrases-build`: `bundle_catalogs` no longer ignores a folder it can't read. It panics there, and warns when the
-  `lang` folder doesn't exist.
 - `spiderland`: `callbacks!` evaluates its view and store expressions once. It used to evaluate them again for each line, so
   an expression such as `ui.global::<Page>()` ran once per callback.
 

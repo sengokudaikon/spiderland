@@ -51,22 +51,4 @@
 | `Rows` | A list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. |
 | `Rows::sync_by` | Matches rows by key, so a row's focus follows its item when rows before it come or go. |
 | `InnerRows` | Keeps a list inside each row, with one stable model per row, and works around a Slint bug that can lose its changes. |
-| `select_language` | Picks the user's language for the views and the phrases alike. |
 | `testing` | The real window with no display, driven by real input. Behind the `testing` feature. |
-
-## Words: `spiderland-phrases`
-
-| Item | What it does |
-|---|---|
-| `phrases!` | Declares words by name, beside the code that uses them. |
-| `Phrase` | One piece of text. `Phrase::with` fills in named values. |
-| `Plural` | A count's forms. `{n}` picks the form. |
-| `Translations` | Checks the bundled catalogs and selects the language shown. |
-| `locale` | Number symbols for the language shown. |
-
-## Translation build: `spiderland-phrases-build`
-
-| Item | What it does |
-|---|---|
-| `bundle_catalogs` | Turns `.po` files into a table of catalogs, in a build script. |
-| `Template` | Collects every `phrases!` entry and `@tr` into one `.pot`, and checks that it is current. |

@@ -1,7 +1,7 @@
 # A small frame for desktop UIs. See README.md.
 [workspace]
 resolver = "3"
-members = ["spiderland", "spiderland-slint", "spiderland-phrases", "spiderland-phrases-build"]
+members = ["spiderland", "spiderland-slint"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,20 +13,8 @@ license = "MIT OR Apache-2.0"
 # Slint is pinned exactly: point releases have broken APIs before.
 slint = "=1.18.1"
 tokio = { version = "=1.53.3", features = ["sync"] }
-# The parser slint-build bundles translations with, so the Rust phrases' table takes what the views take.
-rspolib = "=0.1.2"
-# The template reads Rust sources as tokens, and their strings as Rust reads them. The versions thiserror's macro already builds.
-proc-macro2 = { version = "1.0.107", default-features = false }
-syn = { version = "3.0.9", default-features = false }
-# The user's locale, read as Slint reads it to pick a bundled translation.
-sys-locale = "0.3.2"
-tempfile = "3.27.0"
-# A library's errors, as types a caller can match and print.
-thiserror = "2.0.21"
-windows-sys = "0.61.2"
 
 spiderland = { path = "spiderland" }
-spiderland-phrases = { path = "spiderland-phrases" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

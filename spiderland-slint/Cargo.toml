@@ -12,8 +12,6 @@ testing = []
 
 [dependencies]
 spiderland.workspace = true
-spiderland-phrases.workspace = true
-sys-locale.workspace = true
 slint.workspace = true
 tokio.workspace = true
 
