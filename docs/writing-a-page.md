@@ -12,8 +12,11 @@ Put it in a crate without Slint.
 - First loads go in `Feature::start`, not in intents the host sends after building the store.
 - What runs while the state wants it, such as a timer or a watch on a service, is a `Subscription`. `Feature::subscriptions` lists
   what a state wants, including what always runs. Test it with `subscriptions`.
-- To tell another feature something, `emit` an `Output`. Whoever builds the two stores connects them with `Store::forward`, straight
-  after building them.
+- To tell another feature something, `emit` an `Output`. Whoever builds the two stores connects them with `Store::forward`. An
+  output reaches only those listening when it goes out. So if the store's start has to be heard, build it with `Store::build`,
+  forward from the `Wiring`, then `start` it.
+- To keep another store current on part of this one's state, such as settings, `share` it. The other store gets the value at once,
+  however late it is built, and again whenever it changes.
 
 ## 2. `present`
 

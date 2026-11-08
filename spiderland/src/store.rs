@@ -309,12 +309,28 @@ impl<I> Intents<I> {
 }
 
 /// Hears one output, and says false once no one is left to tell.
-type Listener<O> = Rc<dyn Fn(&O) -> bool>;
+type Listener<O> = Rc<Heard<O>>;
+
+/// What a [`Listener`] runs.
+type Heard<O> = dyn Fn(&O) -> bool;
 
 type Observer<F> = Rc<dyn Fn(Seen<'_, F>)>;
 
 /// Takes an output once every listener has heard it.
 type Keeper<O> = Box<dyn FnMut(O)>;
+
+/// Looks at the state after a batch and says what to send, if anything.
+type Watcher<S> = Rc<dyn Fn(&S) -> Watched>;
+
+/// What a [`Watcher`] makes of the state.
+enum Watched {
+    /// What it shares hasn't changed.
+    Same,
+    /// What it shares changed: this sends it, once no borrow of the state is held.
+    Send(Box<dyn FnOnce()>),
+    /// Its destination is gone, so it can go too.
+    Gone,
+}
 
 struct Inner<F: Feature> {
     state: RefCell<F::State>,
@@ -329,8 +345,10 @@ struct Inner<F: Feature> {
     /// Replaced whole when one is added or ends, so telling them costs no copy of the list. Observers likewise.
     listeners: RefCell<Rc<[Listener<F::Output>]>>,
     observers: RefCell<Rc<[Observer<F>]>>,
+    watchers: RefCell<Rc<[Watcher<F::State>]>>,
     /// Set only by a [`TestStore`](crate::TestStore), to keep the outputs. Any other store lets each go once it is told.
     keeper: RefCell<Option<Keeper<F::Output>>>,
+    /// Also set while the store is built and not yet started, so what it is sent waits for the start.
     draining: Cell<bool>,
     /// Holds only a weak reference to this store.
     intents: Intents<F::Intent>,
@@ -353,27 +371,30 @@ impl<F: Feature> fmt::Debug for Store<F> {
 }
 
 impl<F: Feature> Store<F> {
-    /// Starts the store: runs [`Feature::start`], renders the first state and performs the effects `start` asked for. An intent
-    /// sent from any of that runs right after it.
-    pub fn new(mut state: F::State, host: impl Host<F>) -> Self {
-        let mut effects = Effects::detached();
-        F::start(&mut state, &mut effects);
+    /// Builds the store and starts it, as [`Store::build`] and [`Wiring::start`] do. What the store does as it starts reaches
+    /// no listener and no observer, since none can be there yet. Wire a store that has to be heard from the start on a [`Wiring`].
+    pub fn new(state: F::State, host: impl Host<F>) -> Self {
+        Self::build(state, host).start()
+    }
+
+    /// Builds the store without starting it, so its listeners and observers can be wired first. Nothing runs until
+    /// [`Wiring::start`]. Intents sent to it before then wait, and run right after the start.
+    pub fn build(state: F::State, host: impl Host<F>) -> Wiring<F> {
         let inner = Rc::new_cyclic(|this: &Weak<Inner<F>>| Inner {
             state: RefCell::new(state),
             subscriptions: RefCell::default(),
             host: RefCell::new(Box::new(host) as Box<dyn Host<F>>),
             queue: RefCell::new(VecDeque::new()),
-            effects: RefCell::new(effects.effects.into()),
+            effects: RefCell::new(VecDeque::new()),
             outputs: RefCell::new(VecDeque::new()),
             listeners: RefCell::new(Rc::from(Vec::new())),
             observers: RefCell::new(Rc::from(Vec::new())),
+            watchers: RefCell::new(Rc::from(Vec::new())),
             keeper: RefCell::new(None),
-            draining: Cell::new(false),
+            draining: Cell::new(true),
             intents: Intents(Rc::new(this.clone())),
         });
-        inner.render_first();
-        inner.drain();
-        Store(inner)
+        Wiring(Store(inner))
     }
 
     /// Handles `intent` now, unless the store is already at work (a render or an effect called back into the view, an effect
@@ -401,27 +422,43 @@ impl<F: Feature> Store<F> {
     }
 
     /// Sends `map(output)` to `to` for each output this store emits, in the order they were forwarded. `map` returns an intent,
-    /// or `None` to ignore that output. It keeps neither store alive, and ends with whichever store goes first.
+    /// or `None` to ignore that output. It keeps neither store alive, and ends with whichever store goes first. Once `to` is
+    /// gone, what `map` holds is let go of the next time this store emits.
     ///
-    /// Forward straight after building the store: an output emitted before there is a listener reaches no one. If `map` needs to
-    /// reach a store, it should hold [`Intents`], because a [`Store`] it holds stays alive for as long as this one does.
+    /// An output emitted before there is a listener reaches no one, so a store whose start has to be heard is wired on a
+    /// [`Wiring`]. If `map` needs to reach a store, it should hold [`Intents`], because a [`Store`] it holds stays alive for as
+    /// long as this one does. To end a connection while both stores go on, use [`Store::connect`].
     pub fn forward<I, R>(&self, to: &Intents<I>, map: impl Fn(&F::Output) -> R + 'static)
     where
         I: 'static,
         R: Into<Option<I>>,
     {
-        let to = to.clone();
-        let added: Listener<F::Output> = Rc::new(move |output| {
-            if !to.is_alive() {
-                return false;
-            }
-            if let Some(intent) = map(output).into() {
-                to.send(intent);
-            }
-            true
-        });
-        let mut listeners = self.0.listeners.borrow_mut();
-        *listeners = listeners.iter().cloned().chain([added]).collect();
+        self.0.listen(to, map, Rc::new(Cell::new(true)));
+    }
+
+    /// Forwards as [`Store::forward`] does, until the returned [`Connection`] is dropped. Dropping it lets go of `map` at once,
+    /// and nothing goes through it after that, not even an output from the batch under way.
+    pub fn connect<I, R>(&self, to: &Intents<I>, map: impl Fn(&F::Output) -> R + 'static) -> Connection
+    where
+        I: 'static,
+        R: Into<Option<I>>,
+    {
+        Inner::connect(&self.0, to, map)
+    }
+
+    /// Sends `map(&project(state))` to `to` now, and again after each batch in which the projection changed. It suits state that
+    /// another store keeps a copy of, such as settings: an output is heard only by those listening when it goes out, but a store
+    /// connected later starts on the current value. It ends with whichever store goes first.
+    ///
+    /// After each batch, the projection is made again and compared with the last one sent, so keep it cheap: a few fields, not a
+    /// whole list.
+    pub fn share<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static)
+    where
+        T: PartialEq + 'static,
+        I: 'static,
+    {
+        let watcher = self.0.watch(to, project, map);
+        self.0.tell_watchers(&[watcher]);
     }
 
     /// Calls `observer` with each intent just before it is reduced and each effect just before it is performed, in the order the
@@ -431,8 +468,8 @@ impl<F: Feature> Store<F> {
     /// It is handed a reference, so nothing is copied unless it copies, and nothing needs `Debug`. Keep a name, not the intent
     /// itself, because an intent can carry a whole snapshot.
     ///
-    /// It sees only what runs after it is added, so it misses what [`Store::new`] ran: the effects `start` asked for, and what
-    /// the first render and those effects sent. It lives as long as the store, so it shouldn't hold the store. If it panics, the
+    /// It sees only what runs after it is added. To see the store's start too, add it on a [`Wiring`]. It lives as long as the
+    /// store, so it shouldn't hold the store. If it panics, the
     /// intent or effect it was shown is lost, as with a reducer that panics.
     ///
     /// ```
@@ -521,7 +558,228 @@ impl<F: Feature> Store<F> {
     }
 }
 
+/// A store that is built and not yet started, from [`Store::build`]. It is for wiring what listens to the store before
+/// anything runs, so that listeners and observers hear the start too. [`Wiring::start`] starts it.
+///
+/// ```
+/// use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+/// use std::{cell::RefCell, rc::Rc};
+///
+/// /// Says hello as soon as its first effect comes back.
+/// struct Greeter;
+/// impl Feature for Greeter {
+///     type State = ();
+///     type Intent = ();
+///     type Effect = ();
+///     type Output = &'static str;
+///     type Subscription = Never;
+///
+///     fn reduce(_: &mut (), (): (), effects: &mut Effects<(), &'static str>) {
+///         effects.emit("hello");
+///     }
+///
+///     fn start(_: &mut (), effects: &mut Effects<()>) {
+///         effects.push(());
+///     }
+/// }
+///
+/// /// Its work finishes at once.
+/// struct AtOnce;
+/// impl Host<Greeter> for AtOnce {
+///     fn render(&mut self, _: &(), _: &Intents<()>) {}
+///     fn perform(&mut self, (): (), intents: &Intents<()>) {
+///         intents.send(());
+///     }
+/// }
+///
+/// let heard = Rc::new(RefCell::new(Vec::new()));
+/// let wiring = Store::<Greeter>::build((), AtOnce);
+/// let hearing = Rc::clone(&heard);
+/// wiring.forward(&wiring.intents(), move |said| {
+///     hearing.borrow_mut().push(*said);
+///     None
+/// });
+/// let _store = wiring.start();
+/// assert_eq!(*heard.borrow(), ["hello"], "built with Store::new, no one would have heard it");
+/// ```
+#[must_use = "a store that is never started does nothing"]
+pub struct Wiring<F: Feature>(Store<F>);
+
+impl<F: Feature> fmt::Debug for Wiring<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Wiring").field(&format_args!("{}", std::any::type_name::<F>())).finish()
+    }
+}
+
+impl<F: Feature> Wiring<F> {
+    /// A sender of this store's intents, as [`Store::intents`] gives. What it sends before the start waits for it.
+    pub fn intents(&self) -> Intents<F::Intent> {
+        self.0.intents()
+    }
+
+    /// [`Store::forward`], heard from the start.
+    pub fn forward<I, R>(&self, to: &Intents<I>, map: impl Fn(&F::Output) -> R + 'static)
+    where
+        I: 'static,
+        R: Into<Option<I>>,
+    {
+        self.0.forward(to, map);
+    }
+
+    /// [`Store::connect`], heard from the start.
+    pub fn connect<I, R>(&self, to: &Intents<I>, map: impl Fn(&F::Output) -> R + 'static) -> Connection
+    where
+        I: 'static,
+        R: Into<Option<I>>,
+    {
+        self.0.connect(to, map)
+    }
+
+    /// [`Store::share`]. The first value goes out after the first render, once [`Feature::start`] has run.
+    pub fn share<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static)
+    where
+        T: PartialEq + 'static,
+        I: 'static,
+    {
+        (self.0).0.watch(to, project, map);
+    }
+
+    /// [`Store::observe`], from the start, so it sees the effects [`Feature::start`] asked for as well.
+    pub fn observe(&self, observer: impl Fn(Seen<'_, F>) + 'static) {
+        self.0.observe(observer);
+    }
+
+    /// Starts the store: runs [`Feature::start`], renders the first state, and performs the effects `start` asked for. Then it
+    /// runs, in the order they were sent, the intents sent before the start and those that the start's effects sent.
+    pub fn start(self) -> Store<F> {
+        let inner = &(self.0).0;
+        let mut effects = Effects::detached();
+        F::start(&mut inner.state.borrow_mut(), &mut effects);
+        inner.effects.borrow_mut().extend(effects.effects);
+        inner.draining.set(false);
+        inner.render_first();
+        inner.drain();
+        self.0
+    }
+}
+
+/// Ends a connection made with [`Store::connect`] when dropped.
+#[must_use = "dropping it disconnects at once"]
+pub struct Connection {
+    stop: Option<Box<dyn FnOnce()>>,
+}
+
+impl fmt::Debug for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Connection").finish_non_exhaustive()
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop();
+        }
+    }
+}
+
 impl<F: Feature> Inner<F> {
+    /// Adds a listener that sends to `to` while `connected` holds and `to` lives.
+    fn listen<I, R>(&self, to: &Intents<I>, map: impl Fn(&F::Output) -> R + 'static, connected: Rc<Cell<bool>>) -> Weak<Heard<F::Output>>
+    where
+        I: 'static,
+        R: Into<Option<I>>,
+    {
+        let to = to.clone();
+        let added: Listener<F::Output> = Rc::new(move |output| {
+            if !connected.get() || !to.is_alive() {
+                return false;
+            }
+            if let Some(intent) = map(output).into() {
+                to.send(intent);
+            }
+            true
+        });
+        let weak = Rc::downgrade(&added);
+        let mut listeners = self.listeners.borrow_mut();
+        *listeners = listeners.iter().cloned().chain([added]).collect();
+        weak
+    }
+
+    fn connect<I, R>(this: &Rc<Self>, to: &Intents<I>, map: impl Fn(&F::Output) -> R + 'static) -> Connection
+    where
+        I: 'static,
+        R: Into<Option<I>>,
+    {
+        let connected = Rc::new(Cell::new(true));
+        let listener = this.listen(to, map, Rc::clone(&connected));
+        let source = Rc::downgrade(this);
+        Connection {
+            stop: Some(Box::new(move || {
+                connected.set(false);
+                if let Some(source) = source.upgrade() {
+                    let mut kept = source.listeners.borrow_mut();
+                    *kept = kept.iter().filter(|kept| !Weak::ptr_eq(&Rc::downgrade(kept), &listener)).cloned().collect();
+                }
+            })),
+        }
+    }
+
+    /// Adds a watcher that sends `map(&project(state))` to `to` whenever the projection differs from the last one it sent.
+    fn watch<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static) -> Watcher<F::State>
+    where
+        T: PartialEq + 'static,
+        I: 'static,
+    {
+        let to = to.clone();
+        let last = RefCell::new(None::<T>);
+        let added: Watcher<F::State> = Rc::new(move |state| {
+            if !to.is_alive() {
+                return Watched::Gone;
+            }
+            let now = project(state);
+            if last.borrow().as_ref() == Some(&now) {
+                return Watched::Same;
+            }
+            let intent = map(&now);
+            *last.borrow_mut() = Some(now);
+            let to = to.clone();
+            Watched::Send(Box::new(move || to.send(intent)))
+        });
+        let mut watchers = self.watchers.borrow_mut();
+        *watchers = watchers.iter().cloned().chain([Rc::clone(&added)]).collect();
+        added
+    }
+
+    /// Runs `watchers` on the state, then sends what they made once the state's borrow is over, since a store they reach can
+    /// share back. A watcher whose destination is gone goes.
+    fn tell_watchers(&self, watchers: &[Watcher<F::State>]) {
+        let mut sends = Vec::new();
+        let mut gone = Vec::new();
+        {
+            let state = self.state.borrow();
+            for watcher in watchers {
+                match watcher(&state) {
+                    Watched::Same => {}
+                    Watched::Send(send) => sends.push(send),
+                    Watched::Gone => gone.push(Rc::clone(watcher)),
+                }
+            }
+        }
+        if !gone.is_empty() {
+            let mut kept = self.watchers.borrow_mut();
+            *kept = kept.iter().filter(|kept| !gone.iter().any(|gone| Rc::ptr_eq(kept, gone))).cloned().collect();
+        }
+        for send in sends {
+            send();
+        }
+    }
+
+    fn tell_all_watchers(&self) {
+        let watchers = Rc::clone(&self.watchers.borrow());
+        self.tell_watchers(&watchers);
+    }
+
     fn accept(&self, intent: F::Intent) {
         self.queue.borrow_mut().push_back(intent);
         if !self.draining.get() {
@@ -539,10 +797,13 @@ impl<F: Feature> Inner<F> {
 
     fn render_first(&self) {
         let _draining = Draining::start(&self.draining);
-        let mut host = self.host.borrow_mut();
-        host.render(&self.state.borrow(), &self.intents);
-        self.subscribe(&mut **host);
-        self.perform_effects(&mut **host);
+        {
+            let mut host = self.host.borrow_mut();
+            host.render(&self.state.borrow(), &self.intents);
+            self.subscribe(&mut **host);
+            self.perform_effects(&mut **host);
+        }
+        self.tell_all_watchers();
     }
 
     /// Starts what the state wants and stops what it no longer wants. The state's borrow ends before the host runs, and what a
@@ -593,6 +854,7 @@ impl<F: Feature> Inner<F> {
                 self.perform_effects(&mut **host);
             }
             self.tell_listeners();
+            self.tell_all_watchers();
         }
     }
 

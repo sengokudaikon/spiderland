@@ -43,6 +43,13 @@ tag makes a GitHub release from that version's section.
   for the test to take it or answer it with intents, and one left waiting when the store is dropped fails the test.
   `TestStore::rendering` keeps what a function of the state makes of each render, and `TestStore::take_outputs` gives what the
   store told others.
+- `spiderland`: `Store::build`, which builds a store without starting it, and `Wiring`, on which listeners and observers are wired
+  before `Wiring::start`. An output from the start, such as one that follows an effect that answers at once, used to reach no one,
+  and `observe` missed the start. `Store::new` builds and starts in one step, as before.
+- `spiderland`: `Store::connect`, which forwards until the `Connection` it returns is dropped. Dropping it lets go of the mapping at
+  once, for a connection between stores that both go on.
+- `spiderland`: `Store::share`, which sends a projection of the state to another store now, and again after each batch in which it
+  changed, so a store built later starts on the current value.
 - `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
   gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
   outcome is still heard.

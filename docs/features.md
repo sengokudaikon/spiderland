@@ -13,6 +13,9 @@
 | `Store::with_state` | Changes the state directly, for a test or a capture to set up. Nothing renders until the next intent. Behind the `testing` feature. |
 | `Feature::Output`, `Effects::emit` | Let a reducer tell whoever listens. `Never` is for a feature that tells no one. |
 | `Store::forward` | Turns one store's outputs into another store's intents. |
+| `Store::connect`, `Connection` | Forwards until the returned `Connection` is dropped, for a connection between stores that both go on. |
+| `Store::share` | Sends a projection of the state to another store now, and again whenever it changes, so a store built later starts current. |
+| `Store::build`, `Wiring` | Builds a store without starting it, so listeners and observers wired on it hear its start too. `Wiring::start` starts it. |
 | `Store::observe`, `Seen` | Shows each intent and effect as the store runs it, for a trail of what led to a fault. |
 | `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, ask whether they can close, and tell them when the window stays after all. |
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
