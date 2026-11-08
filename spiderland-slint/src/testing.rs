@@ -196,33 +196,51 @@ pub fn advance(by: Duration) {
     settle();
 }
 
-/// Runs what came due on the UI thread. Panics if something asked the app to quit while a window showed.
+/// Runs what came due on the UI thread, until nothing more is due. It goes in rounds: the due timers and `changed` callbacks, then
+/// the events queued for the UI thread. It stops after a round that ran no event and left no timer due, so a timer that an event
+/// sets to fire at once fires in the same call. Panics if something asked the app to quit while a window showed, or if what is
+/// due never runs out.
 pub fn settle() {
-    slint::platform::update_timers_and_animations();
-    for _ in 0..10_000 {
-        let event = EVENTS.lock().unwrap().pop_front();
-        let Some(event) = event else {
+    let mut steps = 0;
+    loop {
+        slint::platform::update_timers_and_animations();
+        let mut ran = false;
+        loop {
+            let event = EVENTS.lock().unwrap().pop_front();
+            let Some(event) = event else {
+                break;
+            };
+            event();
+            ran = true;
+            steps += 1;
+            assert!(steps < 10_000, "the event queue did not settle");
+        }
+        let due = slint::platform::duration_until_next_timer_update() == Some(Duration::ZERO);
+        if !ran && !due {
             assert!(!QUIT_REQUESTED.load(Ordering::SeqCst), "the app was asked to quit while a window showed");
             return;
-        };
-        event();
+        }
+        steps += 1;
+        assert!(steps < 10_000, "the timers did not settle");
     }
-    panic!("the event queue did not settle");
 }
 
-/// Settles until `done` says so. `what` names it if it never does.
+/// Settles until `done` says so. It checks `done` only once a [`settle`] has run out of things to do, so when it returns, `done`
+/// holds and nothing is left to run. `what` names it if it never does.
 pub fn until(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !done() {
+    loop {
+        settle();
+        if done() {
+            return;
+        }
         assert!(Instant::now() < deadline, "{what} must finish");
         std::thread::sleep(Duration::from_millis(1));
-        settle();
     }
-    settle();
 }
 
-/// Settles until all of `background`'s work has come back: a test then sees what the window would show.
+/// Settles until all of `background`'s work has come back, and nothing that came back has started more: a test then sees what the
+/// window would show.
 pub fn idle(background: &Background) {
-    settle();
     until("background work", || background.pending() == 0);
 }

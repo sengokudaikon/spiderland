@@ -111,5 +111,8 @@ tag makes a GitHub release from that version's section.
 - `spiderland`: `Tracked`'s docs say that it sees only changes made through `&mut`, so a `Cell` or a shared `Rc<RefCell<_>>`
   inside one changes with no new version. `Slice::show` no longer claims that an input can't be left out of its key at all.
 - `spiderland`: the example of a window that closes once its editor has saved is on `Lifecycle`, where the API docs show it.
+- `spiderland-slint`: `testing::idle` and `testing::until` come back only once nothing more is due. `until` used to settle once
+  more after `done` held, and that could start more work, so `idle` could return with work still out. `settle` goes in rounds of
+  due timers and queued events until a round runs nothing, so a timer an event sets to fire at once fires in the same call.
 
 [Unreleased]: https://github.com/sengokudaikon/spiderland/commits/main
