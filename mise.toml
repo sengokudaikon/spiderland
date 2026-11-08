@@ -18,7 +18,7 @@ description = "Fail if anything is unformatted"
 run = "cargo fmt --all --check"
 
 [tasks.test]
-description = "Every test of the workspace"
+description = "Every test of the workspace, the showcase's scenarios over real windows among them"
 run = ["cargo test --workspace --offline"]
 
 [tasks.doc]

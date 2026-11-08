@@ -1,0 +1,26 @@
+[package]
+name = "showcase"
+description = "A small document library on spiderland: the framework's own example, and the test of what it can do."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+spiderland.workspace = true
+spiderland-slint = { path = "../spiderland-slint" }
+slint.workspace = true
+# Channels only, for the service's watch.
+tokio.workspace = true
+
+[dev-dependencies]
+spiderland = { workspace = true, features = ["testing"] }
+spiderland-slint = { path = "../spiderland-slint", features = ["testing"] }
+
+# The scenarios over the real windows. Slint's platform is set once per process, so they run in turn on the main thread.
+[[test]]
+name = "views"
+harness = false
+
+[lints]
+workspace = true

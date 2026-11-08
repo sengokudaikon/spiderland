@@ -41,6 +41,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+      # The showcase is a member, so this runs its scenarios too, over real windows with no display.
       - run: cargo test --workspace --locked
 
   # The workspace pins a nightly, but its crates must not come to need one.
