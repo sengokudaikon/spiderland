@@ -8,12 +8,13 @@ license.workspace = true
 
 [features]
 # `testing`: the real window with no display, for tests that drive it by real input.
-testing = []
+testing = ["dep:i-slint-backend-testing"]
 
 [dependencies]
 spiderland.workspace = true
 slint.workspace = true
 tokio.workspace = true
+i-slint-backend-testing = { workspace = true, optional = true }
 
 [dev-dependencies]
 # This crate's own tests use its `testing` feature.

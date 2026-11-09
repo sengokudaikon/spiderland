@@ -74,3 +74,4 @@
 | `Rows::sync_by` | Matches rows by key, so a row's focus follows its item when rows before it come or go. |
 | `InnerRows` | Keeps a list inside each row, with one stable model per row, and works around a Slint bug that can lose its changes. `fill` keeps a model per position, and `fill_by` one per key, for an outer `Rows::sync_by`. |
 | `testing` | The real window with no display, driven by real input. Behind the `testing` feature. |
+| `testing::element`, `testing::find`, `Element` | Find an element by its accessible label, and click or type into its middle, wherever the layout put it. Needs the views built with Slint's debug info. |

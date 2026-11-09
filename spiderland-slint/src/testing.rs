@@ -36,22 +36,40 @@
 //! # let _ = first;
 //! ```
 //!
+//! A window laid out by Slint has no fixed places to click. [`element`] finds an element by its accessible label, and clicks or
+//! types into its middle with real input, wherever the layout put it:
+//!
+//! ```no_run
+//! # slint::slint! { import { Button } from "std-widgets.slint"; export component Editor { Button { text: "Save"; } } }
+//! use spiderland_slint::testing::{Headless, element, find};
+//!
+//! let headless = Headless::install();
+//! let editor = Editor::new().unwrap();
+//! element(&editor, "Save").click();
+//! assert!(find(&editor, "Delete").is_none());
+//! ```
+//!
+//! A standard widget is labelled by its text, and any element can say `accessible-label`. The search needs the names Slint keeps
+//! only in a build with its debug info: `with_debug_info(true)` in a `build.rs`, or `SLINT_EMIT_DEBUG_INFO=1` while `slint!`
+//! builds.
+//!
 //! `take_snapshot` gives the frame as RGBA, for the test to save or compare. Software-rendered pixels differ a little from
 //! FemtoVG's and Skia's, so a capture that must match the app exactly needs an app shipped with `renderer-software`.
 //!
 //! Slint's other ways of looking at a window, when this doesn't suit:
-//! - `i-slint-backend-testing` finds elements by ID, accessible label, type or role and drives them (`single_click`, `drag`,
-//!   `set_accessible_value`). It is internal, so pin it exactly. It needs `SLINT_EMIT_DEBUG_INFO=1`, measures text with a fixed font
-//!   size, and draws nothing unless `TestingBackendOptions` asks for the `software` renderer. Using its element handles on this
-//!   module's window hasn't been tried.
+//! - `i-slint-backend-testing`, which [`element`] is built on, finds elements by ID, type or role too, and drives them without
+//!   input (`set_accessible_value`, `invoke_accessible_default_action`). [`Element::handle`] hands over its element for those.
+//!   Its own platform measures text with a fixed font size and draws nothing unless `TestingBackendOptions` asks for the
+//!   `software` renderer, so this module keeps its own.
 //! - `slint-viewer --screenshot out.png --load-data data.json --size 940x580 file.slint` renders one component with no Rust.
 //! - The embedded MCP server (`--features slint/mcp`, `SLINT_EMIT_DEBUG_INFO=1`, `SLINT_MCP_PORT`, optionally
 //!   `SLINT_BACKEND=headless`) lets an agent take screenshots, click and type against the running app.
 
 use crate::Background;
+use i_slint_backend_testing::ElementHandle;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Clipboard, EventLoopProxy, Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{EventLoopError, LogicalPosition, PhysicalSize, PlatformError, SharedString, Window};
+use slint::{ComponentHandle, EventLoopError, LogicalPosition, PhysicalSize, PlatformError, SharedString, Window};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
@@ -279,6 +297,75 @@ impl Input<'_> {
     pub fn close(self) {
         self.0.dispatch_event(WindowEvent::CloseRequested);
         settle();
+    }
+}
+
+/// The element of `component` whose accessible label is `label`, for real input to its middle. Panics unless exactly one such
+/// element shows, so a test names what it clicks.
+pub fn element<'a, C: ComponentHandle>(component: &'a C, label: &str) -> Element<'a> {
+    let mut found = labelled(component, label);
+    match found.len() {
+        1 => found.remove(0),
+        0 => panic!("no element labelled {label:?} shows"),
+        n => panic!("{n} elements labelled {label:?} show: give each its own `accessible-label`"),
+    }
+}
+
+/// The element of `component` whose accessible label is `label`, if one shows. Panics if several do.
+pub fn find<'a, C: ComponentHandle>(component: &'a C, label: &str) -> Option<Element<'a>> {
+    let mut found = labelled(component, label);
+    assert!(found.len() < 2, "{} elements labelled {label:?} show: give each its own `accessible-label`", found.len());
+    found.pop()
+}
+
+fn labelled<'a, C: ComponentHandle>(component: &'a C, label: &str) -> Vec<Element<'a>> {
+    ElementHandle::find_by_accessible_label(component, label)
+        .filter(|handle| handle.is_valid() && handle.computed_opacity() > 0.0)
+        .map(|handle| Element {
+            handle,
+            window: component.window(),
+        })
+        .collect()
+}
+
+/// One element of a component, from [`element`] or [`find`]. Its actions are real input to its window, at its middle as the
+/// layout placed it, and each ends with a [`settle`].
+pub struct Element<'a> {
+    handle: ElementHandle,
+    window: &'a Window,
+}
+
+impl Element<'_> {
+    /// A left click in its middle.
+    pub fn click(&self) {
+        let (x, y) = self.middle();
+        Input(self.window).click(x, y);
+    }
+
+    /// Clicks it, then types `text` into what has the focus, such as this text box.
+    pub fn type_text(&self, text: &str) {
+        self.click();
+        Input(self.window).type_text(text);
+    }
+
+    /// Where its middle is in its window, in logical pixels.
+    pub fn middle(&self) -> (f32, f32) {
+        let (at, size) = (self.handle.absolute_position(), self.handle.size());
+        (at.x + size.width / 2.0, at.y + size.height / 2.0)
+    }
+
+    /// Slint's handle on it, for what else it offers, such as its accessible value.
+    pub fn handle(&self) -> &ElementHandle {
+        &self.handle
+    }
+}
+
+impl fmt::Debug for Element<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Element")
+            .field("label", &self.handle.accessible_label())
+            .field("middle", &self.middle())
+            .finish()
     }
 }
 

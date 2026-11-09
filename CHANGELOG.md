@@ -92,8 +92,13 @@ tag makes a GitHub release from that version's section.
   its work would. What it sends once the store has stopped it goes nowhere, and starts compare equal only to themselves, so a
   test can see a load replaced, a late answer dropped, and a key stopped and started again.
 - `spiderland-slint`: `Sampled`, which sends the latest of an input that comes fast, such as a drag, on the next turn of the
-  event loop, or with `Sampled::every` at most once an interval. A burst reaches the store as its last value, in one batch. A command sent through `Sampled::send` goes after the samples
-  before it, `flush` sends what waits at once, and a sampler dropped still sends what waits.
+  event loop, or with `Sampled::every` at most once an interval. A burst reaches the store as its last value, in one batch. A
+  command sent through `Sampled::send` goes after the samples before it, `flush` sends what waits at once, and a sampler
+  dropped still sends what waits.
+- `spiderland-slint`: `testing::element` and `testing::find`, which find an element by its accessible label, and `Element`, which
+  clicks or types into its middle with real input, wherever the layout put it. A test of a window laid out by Slint needs no
+  coordinates. The search needs the views built with Slint's debug info. `testing` now brings in `i-slint-backend-testing`,
+  pinned with Slint.
 - `spiderland`: `Saved`, `Store::save_in` and `Wiring::save_in`, so each store saves its part of the session under a key, in a
   form the app picks, as the app says when. On the next start, each store takes its part back as it is built, and a child its
   own by its key.

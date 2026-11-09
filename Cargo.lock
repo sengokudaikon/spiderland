@@ -4040,6 +4040,7 @@ dependencies = [
 name = "spiderland-slint"
 version = "0.1.0"
 dependencies = [
+ "i-slint-backend-testing",
  "slint",
  "spiderland",
  "spiderland-slint",

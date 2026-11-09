@@ -1,0 +1,3 @@
+# Slint keeps the names of elements in what `slint!` builds, so this workspace's tests can find them by accessible label.
+[env]
+SLINT_EMIT_DEBUG_INFO = "1"
