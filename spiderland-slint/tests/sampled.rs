@@ -6,9 +6,10 @@
 use slint::ComponentHandle;
 use spiderland::{Effects, Feature, Host, Intents, Never, Store};
 use spiderland_slint::Sampled;
-use spiderland_slint::testing::{Headless, settle};
+use spiderland_slint::testing::{Headless, advance, settle};
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 slint::slint! {
     export component Pad inherits Window {
@@ -108,6 +109,27 @@ fn a_burst_of_samples_reaches_the_store_as_its_last_one() {
     let flushed = renders.get();
     settle();
     assert_eq!(renders.get(), flushed, "the turn after had nothing to send");
+
+    // At most once an interval: the first after a quiet spell goes at once, the rest wait it out, and the last goes too.
+    let frame = Duration::from_millis(16);
+    let paced = Sampled::every(frame, &store.intents());
+    paced.sample(Intent::Moved(20));
+    settle();
+    assert_eq!(pad.get_shown(), 20, "the first goes on the next turn");
+    let first = renders.get();
+    for at in 21..=30 {
+        paced.sample(Intent::Moved(at));
+        settle();
+    }
+    assert_eq!((renders.get(), pad.get_shown()), (first, 20), "the rest wait out the interval");
+    advance(frame);
+    assert_eq!((renders.get(), pad.get_shown()), (first + 1, 30), "then the latest goes, once");
+    advance(frame);
+    assert_eq!(renders.get(), first + 1, "nothing waited, so nothing went");
+    paced.sample(Intent::Moved(31));
+    settle();
+    assert_eq!(pad.get_shown(), 31, "after a quiet interval, a sample goes on the next turn again");
+    drop(paced);
 
     // Dropped, a sampler still sends what waits.
     let other = Sampled::new(&store.intents());

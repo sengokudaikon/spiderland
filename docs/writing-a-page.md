@@ -146,8 +146,10 @@ render that caused it.
 **Inputs that come fast**
 
 A drag, a scrub or a resize sends an intent per event, and each is a batch of its own: a reduce, a render, the subscriptions and
-the effects. Send such an input through a `Sampled`, which keeps only the latest and sends it once per turn of the event loop.
-Send what has to follow it, such as the drop at a drag's end, through the same sampler's `send`, so it goes after the last move.
+the effects. Send such an input through a `Sampled`, which keeps only the latest. `Sampled::new` sends it on the next turn of the
+event loop. Slint already merges the pointer's moves within a turn, so for a drag, `Sampled::every` with a frame's interval sends
+at most once a frame, and the last move still goes. Send what has to follow it, such as the drop at a drag's end, through the
+same sampler's `send`, so it goes after the last move.
 A debounce waits for an input to stop, which suits a search, not a drag that shows where it is as it moves.
 
 **Lists inside rows**

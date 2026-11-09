@@ -69,7 +69,7 @@
 | `Background`, `on_watch`, `on_wake` | `spiderland`'s, on Slint's event loop. |
 | `every` | Sends an intent repeatedly until its timer is dropped. |
 | `after` | Sends an intent once after a delay. Keep the timer in one place and it debounces. |
-| `Sampled` | Sends the latest of an input that comes fast, such as a drag, once per turn of the event loop, so a burst is one batch. A command sent through it goes after the samples before it. |
+| `Sampled` | Sends the latest of an input that comes fast, such as a drag, on the next turn of the event loop or at most once an interval, so a burst is one batch. A command sent through it goes after the samples before it. |
 | `Rows` | A list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. |
 | `Rows::sync_by` | Matches rows by key, so a row's focus follows its item when rows before it come or go. |
 | `InnerRows` | Keeps a list inside each row, with one stable model per row, and works around a Slint bug that can lose its changes. `fill` keeps a model per position, and `fill_by` one per key, for an outer `Rows::sync_by`. |

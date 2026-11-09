@@ -9,7 +9,8 @@
 //!   can be let go of ([`Background::local`]) and for work that can't ([`Background::finish`]). It is
 //!   [`spiderland::Background`] on [`Slint`]'s loop.
 //! - [`every`] and [`after`]: a repeating intent and a delayed one, each ending with the timer it returns.
-//! - [`Sampled`]: an input that comes fast, such as a drag, sent once per turn of the event loop as its latest value.
+//! - [`Sampled`]: an input that comes fast, such as a drag, sent as its latest value on the next turn of the event loop, or at
+//!   most once an interval.
 //! - [`on_wake`] and [`on_watch`]: a service on another thread telling a feature that something changed.
 //! - [`Rows`]: a list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. [`InnerRows`]
 //!   keeps a list inside each row.

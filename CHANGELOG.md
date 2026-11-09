@@ -91,8 +91,8 @@ tag makes a GitHub release from that version's section.
 - `spiderland`: `TestStore::subscribed` and `Subscribed`, the start of a running subscription for a test to answer through as
   its work would. What it sends once the store has stopped it goes nowhere, and starts compare equal only to themselves, so a
   test can see a load replaced, a late answer dropped, and a key stopped and started again.
-- `spiderland-slint`: `Sampled`, which sends the latest of an input that comes fast, such as a drag, once per turn of the event
-  loop. A burst reaches the store as its last value, in one batch. A command sent through `Sampled::send` goes after the samples
+- `spiderland-slint`: `Sampled`, which sends the latest of an input that comes fast, such as a drag, on the next turn of the
+  event loop, or with `Sampled::every` at most once an interval. A burst reaches the store as its last value, in one batch. A command sent through `Sampled::send` goes after the samples
   before it, `flush` sends what waits at once, and a sampler dropped still sends what waits.
 - `spiderland`: `Saved`, `Store::save_in` and `Wiring::save_in`, so each store saves its part of the session under a key, in a
   form the app picks, as the app says when. On the next start, each store takes its part back as it is built, and a child its
