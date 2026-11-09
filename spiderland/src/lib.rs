@@ -102,8 +102,9 @@
 //! - **Outside state as a separate input.** A worker's snapshot reaches a feature as an intent and is kept in its state, so
 //!   a render reads one consistent snapshot rather than asking a live handle row by row.
 //! - **Whole-view recomputes.** [`Tracked`] and [`Slice`] let a render redo only the parts whose inputs changed.
-//! - **Scope machinery.** A scope is a state inside a state: a parent's `reduce` hands the child its state, intent and
-//!   [`Effects::scoped`]. A scope that ends is an `Option` going back to `None`.
+//! - **Scope machinery.** A child is a state inside a state. A parent's `reduce` hands a child feature its state and intent with
+//!   [`Effects::reduce_child`], which wraps its effects and hands back what it emits, or a scope its [`Effects::scoped`]. A
+//!   child that ends is an `Option` going back to `None`, which stops what it runs.
 
 mod background;
 mod error;

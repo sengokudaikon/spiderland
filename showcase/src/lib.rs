@@ -3,7 +3,8 @@
 //!
 //! The parts:
 //! - [`service`]: a fake document service on the showcase's own [`pool`]. A test holds its calls at a gate, and makes them fail.
-//! - [`settings`], [`library`] and [`document`]: the features, each pure, each tested with no window.
+//! - [`settings`], [`library`] and [`document`]: the features, each pure, each tested with no window. A document runs an
+//!   [`export`] inside its store, as a feature of its own.
 //! - [`view`]: the windows, in Slint's language.
 //! - [`app`]: the hosts, and the app that builds the stores and windows and connects them.
 //!
@@ -16,7 +17,7 @@
 //! | 2. The selection stays on its document when rows before it come or go | yes | yes |
 //! | 3. An edit form with validation, and a text box whose edit the reducer refuses | yes | yes |
 //! | 4. Saves of one document go one at a time, and one started before its window closes is recorded | yes | yes |
-//! | 5. An export on the pool, with progress, that the user stops | yes | yes |
+//! | 5. An export on the pool, with progress, that the user stops. It is a feature of its own, inside the document's store | yes | yes |
 //! | 6. A delete confirmation, a question that returns its answer | yes | yes |
 //! | 7. From the library to a document's history, and back | yes | yes |
 //! | 8. Settings shared by every page and window, which a window opened later starts on | | yes |
@@ -31,6 +32,7 @@
 
 pub mod app;
 pub mod document;
+pub mod export;
 pub mod library;
 pub mod pool;
 pub mod service;

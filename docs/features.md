@@ -42,6 +42,7 @@
 | `on_watch`, `on_wake` | Let a service on another thread tell a feature that something changed. `Listening` is their guard, and `on_wake`'s `Waker` fires it. |
 | `EventLoop` | The one thing `Background` and the listeners need from a toolkit: running a future on the UI thread. |
 | `Effects::scoped` | Runs a child scope's reducer inside its parent's. |
+| `Effects::reduce_child`, `Effects::start_child` | Run a child feature inside its parent's store. Its effects come back wrapped, and what it emits comes back to the parent's `reduce`. |
 | `Effects::detached` | A list no store performs, to run code shared with the reducer outside it. |
 | `step`, `Step` | Runs one reducer step in a test, with no host, and returns its effects and outputs. |
 | `start` | Runs `Feature::start` in a test, with no host, and returns its effects. |

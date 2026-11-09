@@ -3,6 +3,7 @@
 //! Its store lives as long as the app keeps it, not as long as a window shows it, so a save started before its last window closes
 //! still finishes, and its outcome is recorded here.
 
+use crate::export::{self, Export};
 use crate::service::DocId;
 use crate::settings::Preferences;
 use spiderland::{CloseAnswer, Effects, Error, Feature, Lifecycle, OneAtATime, Pulse};
@@ -21,13 +22,6 @@ pub struct Content {
     pub title: String,
     /// The body.
     pub body: String,
-}
-
-/// An export under way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Export {
-    /// The steps done.
-    pub done: u32,
 }
 
 /// A question the editor asks before it goes on.
@@ -75,8 +69,8 @@ pub struct State {
     pub close: Pulse,
     /// Why the last save, export or delete failed.
     pub error: Option<String>,
-    /// The export under way.
-    pub export: Option<Export>,
+    /// The export under way, a feature of its own. Back to `None`, its work stops.
+    pub export: Option<export::State>,
     /// The question shown.
     pub asking: Option<Ask>,
     /// Whether a close waits for a save to finish.
@@ -141,10 +135,8 @@ pub enum Intent {
     Saved(Result<Result<u32, String>, Error>),
     /// Starts an export.
     Export,
-    /// An export's steps done so far.
-    Progress(u32),
-    /// An export's end: whether it finished, or why not. An export stopped sends nothing.
-    Exported(Result<bool, Error>),
+    /// What the export under way hears.
+    Exporting(export::Intent),
     /// Stops the export under way.
     StopExport,
     /// Asks to delete the document.
@@ -186,8 +178,8 @@ pub enum Output {
 pub enum Running {
     /// Hears when another program changes a document.
     Watching,
-    /// An export, on the pool.
-    Exporting,
+    /// The export's work.
+    Export(export::Steps),
 }
 
 impl Feature for Document {
@@ -223,20 +215,20 @@ impl Feature for Document {
             Intent::Saved(result) => saved(state, result, effects),
             Intent::Export => {
                 if state.export.is_none() {
-                    state.export = Some(Export { done: 0 });
+                    let export = state.export.insert(export::State::default());
+                    effects.start_child::<Export>(export, |never| match never {});
                 }
             }
-            Intent::Progress(done) => {
-                if let Some(export) = state.export.as_mut() {
-                    export.done = done;
-                }
-            }
-            Intent::Exported(result) => {
-                if state.export.take().is_some() {
-                    match result {
-                        Ok(true) => state.toast.fire("Exported".to_owned()),
-                        Ok(false) => {}
-                        Err(error) => state.error = Some(format!("The export failed: {error}.")),
+            // An intent for an export that has stopped is let go.
+            Intent::Exporting(intent) => {
+                let Some(export) = state.export.as_mut() else {
+                    return;
+                };
+                for ended in effects.reduce_child::<Export>(export, intent, |never| match never {}) {
+                    state.export = None;
+                    match ended {
+                        export::Output::Finished => state.toast.fire("Exported".to_owned()),
+                        export::Output::Failed(why) => state.error = Some(why),
                     }
                 }
             }
@@ -270,7 +262,7 @@ impl Feature for Document {
 
     fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
         let watching = (!state.deleted).then_some(Running::Watching);
-        watching.into_iter().chain(state.export.map(|_| Running::Exporting))
+        watching.into_iter().chain(state.export.iter().flat_map(Export::subscriptions).map(Running::Export))
     }
 }
 

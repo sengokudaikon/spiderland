@@ -132,12 +132,148 @@ impl<E, O> Effects<E, O> {
     }
 
     /// Runs a child scope's reducer, which lists its own effect type, and wraps each of them as this feature's. The child emits
-    /// nothing: telling the outside is up to the parent.
+    /// nothing: telling the outside is up to the parent. For a child that is a [`Feature`] of its own, use
+    /// [`Effects::reduce_child`].
     pub fn scoped<C, R>(&mut self, wrap: impl Fn(C) -> E, child: impl FnOnce(&mut Effects<C>) -> R) -> R {
         let mut effects = Effects::detached();
         let result = child(&mut effects);
         self.effects.extend(effects.effects.into_iter().map(wrap));
         result
+    }
+
+    /// Runs a child feature's `reduce` on its part of this feature's state, inside this feature's store. The child's effects
+    /// become this feature's through `wrap`. What the child emits comes back here, for the parent to act on: it can change its
+    /// state, emit an output of its own, or let it go.
+    ///
+    /// The rest of a child inside its parent:
+    /// - Its intents: the parent has an intent that wraps the child's, and hands it on here.
+    /// - Its subscriptions: the parent's [`Feature::subscriptions`] wraps the child's. A child kept in an `Option` stops
+    ///   what it runs once it goes back to `None`, with nothing to cancel.
+    /// - Its host: the parent's host keeps the child's, and calls it with [`Intents::map`], so what it sends comes back
+    ///   wrapped.
+    ///
+    /// An upload inside a page, which the page drops to stop it:
+    ///
+    /// ```
+    /// use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+    /// use std::any::Any;
+    /// use std::{cell::RefCell, rc::Rc};
+    ///
+    /// struct Upload;
+    /// enum UploadIntent {
+    ///     Sent(u32),
+    /// }
+    /// #[derive(PartialEq)]
+    /// struct Sending;
+    /// impl Feature for Upload {
+    ///     /// The parts sent so far.
+    ///     type State = u32;
+    ///     type Intent = UploadIntent;
+    ///     type Effect = Never;
+    ///     /// Says when the last part is sent.
+    ///     type Output = ();
+    ///     type Subscription = Sending;
+    ///
+    ///     fn reduce(sent: &mut u32, UploadIntent::Sent(parts): UploadIntent, effects: &mut Effects<Never, ()>) {
+    ///         *sent = parts;
+    ///         if parts == 3 {
+    ///             effects.emit(());
+    ///         }
+    ///     }
+    ///
+    ///     fn subscriptions(_: &u32) -> impl IntoIterator<Item = Sending> {
+    ///         [Sending]
+    ///     }
+    /// }
+    ///
+    /// struct Page;
+    /// #[derive(Default)]
+    /// struct PageState {
+    ///     upload: Option<u32>,
+    ///     done: bool,
+    /// }
+    /// enum PageIntent {
+    ///     Start,
+    ///     Stop,
+    ///     Upload(UploadIntent),
+    /// }
+    /// #[derive(PartialEq)]
+    /// enum Running {
+    ///     Upload(Sending),
+    /// }
+    /// impl Feature for Page {
+    ///     type State = PageState;
+    ///     type Intent = PageIntent;
+    ///     type Effect = Never;
+    ///     type Output = Never;
+    ///     type Subscription = Running;
+    ///
+    ///     fn reduce(state: &mut PageState, intent: PageIntent, effects: &mut Effects<Never>) {
+    ///         match intent {
+    ///             PageIntent::Start => state.upload = Some(0),
+    ///             PageIntent::Stop => state.upload = None,
+    ///             PageIntent::Upload(intent) => {
+    ///                 // An intent for an upload that is gone is let go.
+    ///                 let Some(upload) = state.upload.as_mut() else { return };
+    ///                 let ended = effects.reduce_child::<Upload>(upload, intent, |never| match never {});
+    ///                 if !ended.is_empty() {
+    ///                     state.upload = None;
+    ///                     state.done = true;
+    ///                 }
+    ///             }
+    ///         }
+    ///     }
+    ///
+    ///     fn subscriptions(state: &PageState) -> impl IntoIterator<Item = Running> {
+    ///         state.upload.iter().flat_map(Upload::subscriptions).map(Running::Upload)
+    ///     }
+    /// }
+    ///
+    /// /// The upload's host. It keeps the sender it is given, as a timer or a worker would.
+    /// struct UploadHost(Rc<RefCell<Option<Intents<UploadIntent>>>>);
+    /// impl Host<Upload> for UploadHost {
+    ///     fn perform(&mut self, effect: Never, _: &Intents<UploadIntent>) {
+    ///         match effect {}
+    ///     }
+    ///     fn subscribe(&mut self, Sending: &Sending, intents: &Intents<UploadIntent>) -> Box<dyn Any> {
+    ///         *self.0.borrow_mut() = Some(intents.clone());
+    ///         Box::new(())
+    ///     }
+    /// }
+    ///
+    /// /// The page's host runs the upload's.
+    /// struct PageHost(UploadHost);
+    /// impl Host<Page> for PageHost {
+    ///     fn perform(&mut self, effect: Never, _: &Intents<PageIntent>) {
+    ///         match effect {}
+    ///     }
+    ///     fn subscribe(&mut self, key: &Running, intents: &Intents<PageIntent>) -> Box<dyn Any> {
+    ///         match key {
+    ///             Running::Upload(key) => self.0.subscribe(key, &intents.map(PageIntent::Upload)),
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// let worker = Rc::new(RefCell::new(None));
+    /// let page = Store::new(PageState::default(), PageHost(UploadHost(Rc::clone(&worker))));
+    /// page.send(PageIntent::Start);
+    /// let sent = worker.borrow().clone().expect("the upload runs");
+    /// sent.send(UploadIntent::Sent(3));
+    /// assert_eq!(page.try_read(|state| (state.upload, state.done)), Some((None, true)));
+    /// ```
+    pub fn reduce_child<C: Feature>(&mut self, state: &mut C::State, intent: C::Intent, wrap: impl Fn(C::Effect) -> E) -> Vec<C::Output> {
+        let mut effects = Effects::detached();
+        C::reduce(state, intent, &mut effects);
+        self.effects.extend(effects.effects.into_iter().map(wrap));
+        effects.outputs
+    }
+
+    /// Runs a child feature's [`Feature::start`] on its part of this feature's state, as the parent makes the child. The
+    /// child's effects become this feature's through `wrap`, as for [`Effects::reduce_child`].
+    pub fn start_child<C: Feature>(&mut self, state: &mut C::State, wrap: impl Fn(C::Effect) -> E) {
+        let mut effects = Effects::detached();
+        C::start(state, &mut effects);
+        self.effects.extend(effects.effects.into_iter().map(wrap));
     }
 }
 

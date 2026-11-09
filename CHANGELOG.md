@@ -67,6 +67,10 @@ tag makes a GitHub release from that version's section.
 - `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
   gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
   outcome is still heard.
+- `spiderland`: `Effects::reduce_child` and `Effects::start_child`, which run a child feature inside its parent's store. Its
+  effects come back wrapped, and what it emits comes back to the parent's `reduce` to act on. With the parent's `subscriptions`
+  wrapping the child's and `Intents::map` for its host, a child maps whole. One kept in an `Option` stops what it runs once it
+  goes back to `None`.
 - `spiderland-slint`: `testing::Headless::separate_windows`, after which each component made gets a window of its own, and
   `Headless::on`, whose `testing::Input` sends real input to one window. `Input::close` asks a window to close, as its title
   bar's button does. Until `separate_windows`, every component shows in `Headless::window`, as before.

@@ -3,12 +3,13 @@
 //! Every place where the app writes by hand what the framework doesn't yet do is marked `Workaround:`, with what is missing.
 
 use crate::document::{self, Ask, Choice, Document, Running};
+use crate::export::{self, Export};
 use crate::library::{self, Library, Page};
 use crate::service::{DocId, EXPORT_STEPS, Service};
 use crate::settings::{self, Settings};
 use crate::view::{DocRow, EditorWindow, LibraryWindow, RevisionRow};
 use slint::{ComponentHandle, Timer};
-use spiderland::{Fired, Host, Intents, Lifecycle, Slice, Store, Version, callbacks};
+use spiderland::{Fired, Host, Intents, Lifecycle, Never, Slice, Store, Version, callbacks};
 use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, attach_window, on_watch};
 use std::any::Any;
 use std::cell::RefCell;
@@ -153,9 +154,13 @@ fn open(inner: &Inner, id: DocId) -> EditorWindow {
         show(&window, &opened.store, &opened.windows);
     } else {
         let host = DocumentHost {
-            id,
             service: inner.service.clone(),
             background: inner.background.clone(),
+            export: ExportHost {
+                id,
+                service: inner.service.clone(),
+                background: inner.background.clone(),
+            },
         };
         let wiring = Store::<Document>::build(document::State::new(id, settings::Preferences::default()), host);
         inner
@@ -282,11 +287,12 @@ impl WindowHost<Library> for LibraryHost {
     }
 }
 
-/// Runs a document's effects. Its windows are views attached to the store, so it shows nothing itself.
+/// Runs a document's effects, and its export's through the export's host. Its windows are views attached to the store, so it
+/// shows nothing itself.
 struct DocumentHost {
-    id: DocId,
     service: Service,
     background: Background,
+    export: ExportHost,
 }
 
 impl Host<Document> for DocumentHost {
@@ -309,25 +315,41 @@ impl Host<Document> for DocumentHost {
                 let seen = changes.clone();
                 Box::new(on_watch(changes, intents, move || document::Intent::ChangedOutside(*seen.borrow())))
             }
-            Running::Exporting => {
-                let (service, id) = (self.service.clone(), self.id);
-                Box::new(self.background.stoppable(
-                    intents,
-                    move |stop, progress| {
-                        for step in 1..=EXPORT_STEPS {
-                            if stop.is_stopped() {
-                                return false;
-                            }
-                            service.export_step(id, step);
-                            progress.report(step);
-                        }
-                        true
-                    },
-                    document::Intent::Progress,
-                    document::Intent::Exported,
-                ))
-            }
+            // What the export's host sends comes back wrapped as the document's.
+            Running::Export(steps) => self.export.subscribe(&steps, &intents.map(document::Intent::Exporting)),
         }
+    }
+}
+
+/// Runs an export's work on the pool, stopped once the export goes.
+struct ExportHost {
+    id: DocId,
+    service: Service,
+    background: Background,
+}
+
+impl Host<Export> for ExportHost {
+    fn perform(&mut self, effect: Never, _: &Intents<export::Intent>) {
+        match effect {}
+    }
+
+    fn subscribe(&mut self, _: &export::Steps, intents: &Intents<export::Intent>) -> Box<dyn Any> {
+        let (service, id) = (self.service.clone(), self.id);
+        Box::new(self.background.stoppable(
+            intents,
+            move |stop, progress| {
+                for step in 1..=EXPORT_STEPS {
+                    if stop.is_stopped() {
+                        return false;
+                    }
+                    service.export_step(id, step);
+                    progress.report(step);
+                }
+                true
+            },
+            export::Intent::Progress,
+            export::Intent::Exported,
+        ))
     }
 }
 

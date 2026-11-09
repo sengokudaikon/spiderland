@@ -1,6 +1,7 @@
 //! The showcase's rules, each run through a `TestStore` with no window. The scenario each test covers is in its name's comment.
 
 use showcase::document::{self, Ask, Choice, Content, Document, Running, TITLE_LIMIT};
+use showcase::export::{self, Steps};
 use showcase::library::{self, Library, Page};
 use showcase::service::{Doc, DocId, Found, Revision, Summary};
 use showcase::settings::{self, Preferences, Settings};
@@ -254,17 +255,19 @@ fn a_save_under_way_finishes_after_its_window_closes() {
 fn an_export_reports_progress_and_stops_when_asked() {
     let doc = loaded("Alpha", "a");
     doc.send(document::Intent::Export);
-    assert!(doc.is_running(&Running::Exporting));
-    doc.send(document::Intent::Progress(2));
+    assert!(doc.is_running(&Running::Export(Steps)), "the export runs inside the document");
+    doc.send(document::Intent::Exporting(export::Intent::Progress(2)));
     assert_eq!(doc.read(|state| state.export.map(|export| export.done)), Some(2));
 
     doc.send(document::Intent::StopExport);
-    assert!(!doc.is_running(&Running::Exporting), "stopping it drops the work");
+    assert!(!doc.is_running(&Running::Export(Steps)), "dropping the export stops its work");
+    doc.send(document::Intent::Exporting(export::Intent::Progress(3)));
+    assert_eq!(doc.read(|state| state.export), None, "and what it sent after that is let go");
 
     doc.send(document::Intent::Export);
-    doc.send(document::Intent::Exported(Ok(true)));
+    doc.send(document::Intent::Exporting(export::Intent::Exported(Ok(true))));
     assert_eq!(doc.read(|state| (state.export, state.toast.value().clone())), (None, "Exported".to_owned()));
-    assert!(!doc.is_running(&Running::Exporting));
+    assert!(!doc.is_running(&Running::Export(Steps)));
 }
 
 /// Scenario 6.
@@ -368,7 +371,7 @@ fn failures_show_in_the_state_and_the_store_goes_on() {
     assert_eq!(doc.take_outputs(), [document::Output::Changed]);
 
     doc.send(document::Intent::Export);
-    doc.send(document::Intent::Exported(Err(Error::Panicked)));
+    doc.send(document::Intent::Exporting(export::Intent::Exported(Err(Error::Panicked))));
     assert_eq!(doc.read(document::status), "The export failed: background work panicked.");
 
     let library = started_library();

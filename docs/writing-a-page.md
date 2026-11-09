@@ -132,6 +132,22 @@ Use `rows.sync(inner.fill(…))`. A plain `Rows` in a row can lose a change: in 
 painted, an inner item changed in place stays old on screen. Two renders with no paint between them are enough. `InnerRows` gets
 the change onto the screen.
 
+**A child feature inside a page**
+
+A part of a page with rules of its own, such as an export and its progress, can be a `Feature` of its own and still run in the
+page's store. The parent keeps the child's state, often in an `Option`, and maps the rest:
+
+- Intents: the parent has one that wraps the child's, and hands each on with
+  `effects.reduce_child::<Export>(export, intent, Effect::Export)`. The child's effects come back wrapped. What it emits comes back
+  to the parent's `reduce`, which decides what it means. `effects.start_child` runs the child's `start` as the parent makes it.
+- Subscriptions: the parent's `subscriptions` wraps the child's, as in
+  `state.export.iter().flat_map(Export::subscriptions).map(Running::Export)`. Set back to `None`, the child stops what it runs,
+  with nothing to cancel.
+- Host: the parent's host keeps the child's, and calls it with `intents.map(Intent::Export)`, so what its work sends comes back
+  wrapped.
+
+An intent for a child that is gone finds `None`, and the parent lets it go.
+
 **More than one window on a store**
 
 A store has one `Host`, which runs its effects, and any number of views. Write each window's view as a `WindowView`, and attach
