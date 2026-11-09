@@ -75,7 +75,7 @@ tag makes a GitHub release from that version's section.
   a form that refuses an edit, saves one at a time, an export with progress that stops, a delete that asks first, a history
   page, settings shared by every window, a second window on one document, a close that asks first, and failures that show in
   the state. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
-  the app has to write by hand is marked `Workaround:` in its code.
+  the app has to write by hand is marked `Workaround:` in its code. `mise run showcase` runs it on the desktop.
 
 ### Changed
 

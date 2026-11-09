@@ -26,6 +26,8 @@
 //! | 12. A failed job and a panicking one each show in the state, and the store goes on | yes | yes |
 //!
 //! Where the app writes by hand what the framework doesn't yet do, the code says `Workaround:` and names what is missing.
+//!
+//! `mise run showcase` runs it on the desktop, on the [`SAMPLE`] documents.
 
 pub mod app;
 pub mod document;
