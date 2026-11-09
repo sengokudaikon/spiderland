@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use slint::{ComponentHandle, Timer};
 use spiderland::{Attached, Child, Children, Fired, Host, Intents, Lifecycle, Never, Saved, Slice, Store, Version, callbacks};
-use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, ask_before_closing, attach_window, on_watch};
+use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, after, ask_before_closing, attach_window, on_watch};
 use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;
@@ -109,6 +109,7 @@ impl App {
         callbacks!(library_window, settings.intents(), {
             on_page_size_changed: |size| settings::Intent::PageSize(size.max(0) as usize),
             on_word_count_changed: |on| settings::Intent::WordCount(on),
+            on_autosave_changed: |on| settings::Intent::Autosave(on),
         });
         // Closing the library closes the app, once every document has closed. The session is saved as the user asks, while the
         // documents it names are still open.
@@ -330,6 +331,7 @@ impl WindowHost<Library> for LibraryHost {
         window.set_status(library::status(state).into());
         window.set_page_size(state.preferences.page_size as i32);
         window.set_word_count(state.preferences.word_count);
+        window.set_autosave(state.preferences.autosave);
         // The history page shows itself, through its own view.
         window.set_history_shown(matches!(state.shown(), Page::History(_)));
     }
@@ -462,6 +464,8 @@ impl Host<Document> for DocumentHost {
                 let seen = changes.clone();
                 Box::new(on_watch(changes, intents, move || document::Intent::ChangedOutside(*seen.borrow())))
             }
+            Running::Settle(edits) => Box::new(after(document::AUTOSAVE_AFTER, intents, move || document::Intent::Settled(edits))),
+            Running::Retry(failures) => Box::new(after(document::RETRY_AFTER, intents, move || document::Intent::Retry(failures))),
             // What the export's host sends comes back wrapped as the document's, with the start it is for.
             Running::Export(instance, steps) => self.export.subscribe(&steps, &intents.map(move |intent| document::Intent::Exporting(instance, intent))),
         }

@@ -1,6 +1,7 @@
 //! The windows, in Slint's own language. Each element sits at a fixed place, so a test can click it.
 //!
-//! The library window, 400 by 300: the search box on top, a row of 20 pixels per document from y 30, and the buttons at y 240. A
+//! The library window, 400 by 300: the search box on top, a row of 20 pixels per document from y 30, the buttons at y 240, and
+//! the status at y 270, with saving by itself turned on and off at its right. A
 //! row is picked from x 0 to 240, shows its history from 240 to 320, and opens from 320 to 400. A history page lists a revision per
 //! 20 pixels from y 30, and a click picks one.
 //!
@@ -37,6 +38,7 @@ slint::slint! {
         in property <string> status;
         in property <int> page-size;
         in property <bool> word-count;
+        in property <bool> autosave;
         in property <bool> history-shown;
         in property <string> history-title;
         in property <[RevisionRow]> revisions;
@@ -50,6 +52,7 @@ slint::slint! {
         callback refresh();
         callback page-size-changed(int);
         callback word-count-changed(bool);
+        callback autosave-changed(bool);
 
         // The search the state holds, such as one restored. Typing stops the box following it, so each change is copied back.
         in property <string> query;
@@ -157,6 +160,15 @@ slint::slint! {
             x: 0;
             y: 270px;
             text: root.status;
+        }
+        Button {
+            x: 320px;
+            y: 270px;
+            width: 80px;
+            label: root.autosave ? "Auto: on" : "Auto: off";
+            clicked => {
+                root.autosave-changed(!root.autosave);
+            }
         }
 
         callback back();

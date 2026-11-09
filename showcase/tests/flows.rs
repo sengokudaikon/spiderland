@@ -222,14 +222,33 @@ fn settings_tell_others_only_what_changed() {
     settings.send(settings::Intent::PageSize(99));
     assert_eq!(
         settings.take_outputs(),
-        [Preferences { page_size: 4, word_count: false }, Preferences { page_size: 10, word_count: false }]
+        [
+            Preferences {
+                page_size: 4,
+                word_count: false,
+                autosave: false
+            },
+            Preferences {
+                page_size: 10,
+                word_count: false,
+                autosave: false
+            }
+        ]
     );
 
     let library = started_library();
-    library.send(library::Intent::Preferences(Preferences { page_size: 5, word_count: true }));
+    library.send(library::Intent::Preferences(Preferences {
+        page_size: 5,
+        word_count: true,
+        autosave: false,
+    }));
     let (.., page) = search(&library);
     assert_eq!(page, 0, "a new page size starts from the first page");
-    library.send(library::Intent::Preferences(Preferences { page_size: 5, word_count: false }));
+    library.send(library::Intent::Preferences(Preferences {
+        page_size: 5,
+        word_count: false,
+        autosave: false,
+    }));
     assert!(library.take_effects().is_empty(), "only the page size asks for a search");
 }
 
@@ -611,4 +630,62 @@ fn children_restored_from_their_parts_start_where_they_left_off() {
     assert!(restored.is_running(&Running::Export(export, Steps { from: 2 })), "from the step after the last one done");
     assert_eq!(restored.read(|state| state.export.get().map(|export| export.done)), Some(2));
     assert_eq!(restored.take_effects(), [document::Effect::Load(DocId(1))], "and the document loads as it starts");
+}
+
+/// Scenario 16.
+#[test]
+fn edits_save_by_themselves_one_at_a_time_through_a_failure_and_a_close() {
+    use document::Intent::{EditBody, Retry, Saved, Settled};
+    let doc = loaded("Alpha", "a");
+    let save = |body: &str| document::Effect::Save(DocId(1), content("Alpha", body));
+    doc.send(EditBody("ab".into()));
+    assert!(!doc.is_running(&Running::Settle(1)), "saving by itself is off");
+    doc.send(document::Intent::Preferences(Preferences {
+        autosave: true,
+        ..Preferences::default()
+    }));
+    assert!(doc.is_running(&Running::Settle(1)), "a moment after the last edit, it saves");
+    doc.send(EditBody("abc".into()));
+    assert!(
+        !doc.is_running(&Running::Settle(1)) && doc.is_running(&Running::Settle(2)),
+        "each edit starts the wait again"
+    );
+    doc.send(Settled(1));
+    assert!(doc.take_effects().is_empty(), "a wait that a later edit replaced is let go");
+    doc.send(Settled(2));
+    assert_eq!(doc.take_effects(), [save("abc")]);
+
+    // An edit during the write waits for it, and goes next.
+    doc.send(EditBody("abcd".into()));
+    doc.send(Settled(3));
+    assert!(doc.take_effects().is_empty(), "one write at a time");
+    doc.send(Saved(Ok(Ok(2))));
+    assert_eq!(doc.take_effects(), [save("abcd")]);
+
+    // A write that fails tries again, a while later.
+    doc.send(Saved(Ok(Err("The disk is full.".into()))));
+    assert_eq!(doc.read(document::status), "The disk is full.");
+    assert!(doc.is_running(&Running::Retry(1)));
+    for failures in 1..=document::RETRIES {
+        doc.send(Retry(failures));
+        assert_eq!(doc.take_effects(), [save("abcd")]);
+        doc.send(Saved(Ok(Err("The disk is full.".into()))));
+    }
+    assert!(!doc.is_running(&Running::Retry(document::RETRIES + 1)), "it gives up after its tries, and the error stays");
+    doc.send(document::Intent::Save);
+    assert_eq!(doc.take_effects(), [save("abcd")], "a save asked for still goes");
+    doc.send(Saved(Ok(Ok(3))));
+    assert_eq!(doc.read(document::status), "Revision 3");
+    doc.take_outputs();
+
+    // A close with a wait still under way writes what waited, and closes once it is in.
+    doc.send(EditBody("abcde".into()));
+    assert!(doc.is_running(&Running::Settle(4)));
+    doc.send(document::Intent::Life(Lifecycle::CloseRequested));
+    assert_eq!(doc.read(|state| state.asking), None, "it doesn't ask");
+    assert_eq!(doc.take_effects(), [save("abcde")]);
+    assert!(!doc.is_running(&Running::Settle(4)));
+    assert!(doc.take_outputs().is_empty(), "the windows stay until the write is in");
+    doc.send(Saved(Ok(Ok(4))));
+    assert_eq!(doc.take_outputs(), [document::Output::Changed, document::Output::Closed(CloseAnswer::Closed)]);
 }

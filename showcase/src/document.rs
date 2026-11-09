@@ -83,7 +83,23 @@ pub struct State {
     pub preferences: Preferences,
     /// Whether the document is gone.
     pub deleted: bool,
+    /// How many edits the editor has taken. Saving by itself waits for this to stop moving.
+    pub edits: u32,
+    /// The edits that saving by itself, or a save asked for, has dealt with.
+    pub settled: u32,
+    /// How many saves in a row have failed. Saving by itself tries again after each, up to [`RETRIES`] times.
+    pub failures: u32,
 }
+
+/// How long saving by itself waits after the last edit.
+pub const AUTOSAVE_AFTER: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// How long saving by itself waits after a save that failed before it tries again.
+pub const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How many times saving by itself tries again after saves that failed. Then the error stays, until the next edit or a save asked
+/// for.
+pub const RETRIES: u32 = 3;
 
 impl State {
     /// The document `id`, before it loads.
@@ -106,6 +122,9 @@ impl State {
             leaving: false,
             preferences,
             deleted: false,
+            edits: 0,
+            settled: 0,
+            failures: 0,
         }
     }
 
@@ -146,6 +165,10 @@ pub enum Intent {
     EditBody(String),
     /// Saves the edits.
     Save,
+    /// The editor has had no edit for a while since the edit with this count: saving by itself saves it.
+    Settled(u32),
+    /// It is time to try again after this many saves in a row failed.
+    Retry(u32),
     /// A save's new revision, or why it failed.
     Saved(Result<Result<u32, String>, Error>),
     /// Starts an export.
@@ -220,6 +243,10 @@ pub enum Running {
     Watching,
     /// An export's work, for one start of it.
     Export(Instance, export::Steps),
+    /// Saving by itself, waiting for the edits to stop: keyed on the edit count, so each edit starts the wait again.
+    Settle(u32),
+    /// Saving by itself, waiting to try again after the saves that failed, keyed on how many did.
+    Retry(u32),
 }
 
 impl Feature for Document {
@@ -248,10 +275,29 @@ impl Feature for Document {
                     state.refused.fire(());
                 } else {
                     state.content.title = title;
+                    edited(state);
                 }
             }
-            Intent::EditBody(body) => state.content.body = body,
-            Intent::Save => save(state, effects),
+            Intent::EditBody(body) => {
+                state.content.body = body;
+                edited(state);
+            }
+            Intent::Save => {
+                state.settled = state.edits;
+                save(state, effects);
+            }
+            // A wait that a later edit replaced is let go.
+            Intent::Settled(edits) => {
+                if edits == state.edits {
+                    state.settled = edits;
+                    save(state, effects);
+                }
+            }
+            Intent::Retry(failures) => {
+                if failures == state.failures {
+                    save(state, effects);
+                }
+            }
             Intent::Saved(result) => saved(state, result, effects),
             Intent::Export => {
                 if !state.export.is_running() {
@@ -285,7 +331,12 @@ impl Feature for Document {
             Intent::Deleted(Ok(Err(why))) => state.error = Some(why),
             Intent::Deleted(Err(error)) => state.error = Some(format!("The delete failed: {error}.")),
             Intent::Life(Lifecycle::CloseRequested) => {
-                if state.dirty() {
+                if state.dirty() && state.preferences.autosave && state.problem().is_none() {
+                    // Saving by itself writes what waited now, and the windows close once it is in.
+                    state.settled = state.edits;
+                    state.closing = true;
+                    save(state, effects);
+                } else if state.dirty() {
                     state.asking = Some(Ask::Close);
                 } else {
                     // A save under way goes on without a window, and its outcome is kept here.
@@ -306,8 +357,17 @@ impl Feature for Document {
     fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
         let watching = (!state.deleted).then_some(Running::Watching);
         let exporting = state.export.subscriptions::<Export>().map(|(instance, steps)| Running::Export(instance, steps));
-        watching.into_iter().chain(exporting)
+        let autosave = state.preferences.autosave && state.loaded && !state.leaving && !state.deleted;
+        let settling = (autosave && state.edits != state.settled).then_some(Running::Settle(state.edits));
+        let retrying = (autosave && (1..=RETRIES).contains(&state.failures) && state.dirty() && !state.saves.is_running()).then_some(Running::Retry(state.failures));
+        watching.into_iter().chain(exporting).chain(settling).chain(retrying)
     }
+}
+
+/// Counts an edit the editor took. A new edit gets its own tries again.
+fn edited(state: &mut State) {
+    state.edits += 1;
+    state.failures = 0;
 }
 
 fn save(state: &mut State, effects: &mut Effects<Effect, Output>) {
@@ -334,6 +394,7 @@ fn saved(state: &mut State, result: Result<Result<u32, String>, Error>, effects:
             }
             state.revision = revision;
             state.error = None;
+            state.failures = 0;
             state.toast.fire("Saved".to_owned());
             effects.emit(Output::Changed);
             if let Some(content) = next {
@@ -355,6 +416,7 @@ fn saved(state: &mut State, result: Result<Result<u32, String>, Error>, effects:
 /// and asks for a window to show what went wrong. A save that waited still goes.
 fn failed(state: &mut State, why: String, next: Option<Content>, effects: &mut Effects<Effect, Output>) {
     state.error = Some(why);
+    state.failures += 1;
     if let Some(content) = next {
         start_save(state, content, effects);
     }

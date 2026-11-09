@@ -30,6 +30,7 @@
 //! | 13. Closing the library closes the app once every document has closed, and waits for a save under way | yes | yes |
 //! | 14. A trail of what each store ran, by name, and each change to what it shows, which names the steps before a failure | yes | yes |
 //! | 15. The next start is where the last left off: the settings, the search and its page, the document picked, the pages and documents open, and what each of those kept of its own: a history page's revision picked, and a document's export under way | yes | yes |
+//! | 16. Edits that save by themselves a moment after the user stops typing: one write at a time, a failed one tried again, and a close that writes what waited | yes | yes |
 //!
 //! Where the app writes by hand what the framework doesn't yet do, the code says `Workaround:` and names what is missing. No such
 //! place is left.

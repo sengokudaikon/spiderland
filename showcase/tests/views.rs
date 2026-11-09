@@ -4,13 +4,14 @@
 #![allow(missing_docs, reason = "the windows' types come from `slint!`, with no docs")]
 
 use showcase::app::{App, Session};
+use showcase::document::{AUTOSAVE_AFTER, RETRY_AFTER};
 use showcase::pool::Pool;
 use showcase::service::{DocId, Service};
 use showcase::view::{EditorWindow, LibraryWindow};
 use slint::platform::Key;
 use slint::{ComponentHandle, Model};
 use spiderland_slint::Background;
-use spiderland_slint::testing::{Headless, Input, idle, settle, until};
+use spiderland_slint::testing::{Headless, Input, advance, idle, settle, until};
 
 /// One app, on its own service and pool.
 struct Scene<'a> {
@@ -95,6 +96,7 @@ const NEXT: f32 = 120.0;
 const REFRESH: f32 = 200.0;
 const LARGER: f32 = 300.0;
 const WORDS: f32 = 360.0;
+const AUTO: (f32, f32) = (360.0, 280.0);
 const EDITOR_BUTTONS: f32 = 180.0;
 const SAVE: f32 = 40.0;
 const EXPORT: f32 = 120.0;
@@ -482,13 +484,63 @@ fn the_next_start_is_where_the_last_left_off(headless: &Headless) {
     assert!(editors[0].get_word_count_shown());
 }
 
+/// Scenario 16.
+fn edits_save_by_themselves(headless: &Headless) {
+    let scene = Scene::start(headless);
+    let gate = scene.service.gate();
+    scene.library().click(AUTO.0, AUTO.1);
+    assert!(scene.app.library().get_autosave());
+    let editor = scene.open(DocId(2));
+    let typing = headless.on(editor.window());
+    let body = || scene.service.get(DocId(2)).unwrap().body;
+    typing.click(390.0, 40.0);
+    typing.type_text("x");
+    scene.idle();
+    assert_eq!(editor.get_status().as_str(), "Edited", "it waits for the edits to stop");
+    advance(AUTOSAVE_AFTER);
+    scene.idle();
+    assert_eq!((body().as_str(), editor.get_status().as_str()), ("two stepsx", "Revision 2"));
+
+    // An edit during the write waits for it, and goes next.
+    gate.hold();
+    typing.type_text("y");
+    advance(AUTOSAVE_AFTER);
+    gate.wait_for("save 2");
+    typing.type_text("z");
+    advance(AUTOSAVE_AFTER);
+    assert_eq!(gate.waiting(), ["save 2"], "one write at a time");
+    gate.release("save 2");
+    until("the first write", || body() == "two stepsxy");
+    gate.wait_for("save 2");
+    gate.open();
+    scene.idle();
+    assert_eq!((body().as_str(), editor.get_status().as_str()), ("two stepsxyz", "Revision 4"));
+
+    // A write that fails tries again, a while later.
+    scene.service.fail_next_save("The disk is full.");
+    typing.type_text("!");
+    advance(AUTOSAVE_AFTER);
+    scene.idle();
+    assert_eq!(editor.get_status().as_str(), "The disk is full.");
+    advance(RETRY_AFTER);
+    scene.idle();
+    assert_eq!((body().as_str(), editor.get_status().as_str()), ("two stepsxyz!", "Revision 5"));
+
+    // A close with a wait still under way writes what waited first.
+    typing.type_text("?");
+    typing.close();
+    scene.idle();
+    assert!(!editor.window().is_visible(), "it didn't ask, and closed once the write was in");
+    assert_eq!(body(), "two stepsxyz!?");
+}
+
 /// A scenario's name, and the scenario.
 type Scenario = (&'static str, fn(&Headless));
 
 fn main() {
     let headless = Headless::install();
     headless.separate_windows();
-    let scenarios: [Scenario; 12] = [
+    let scenarios: [Scenario; 13] = [
         ("search drops an older answer, and pages move", search_drops_an_older_answer_and_pages_move),
         ("the selection follows its document", the_selection_follows_its_document),
         ("a title too long is refused in the box", a_title_too_long_is_refused_in_the_box),
@@ -503,6 +555,7 @@ fn main() {
         ("a change made elsewhere reloads", a_change_made_elsewhere_reloads),
         ("closing the library waits for every document", closing_the_library_waits_for_every_document),
         ("the next start is where the last left off", the_next_start_is_where_the_last_left_off),
+        ("edits save by themselves", edits_save_by_themselves),
         // It panics in an export on purpose, and the pool prints that panic.
         ("failures show, and the app goes on", failures_show_and_the_app_goes_on),
     ];

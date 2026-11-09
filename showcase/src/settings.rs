@@ -9,6 +9,10 @@ pub struct Preferences {
     pub page_size: usize,
     /// Whether an editor counts the words of its document.
     pub word_count: bool,
+    /// Whether a document saves by itself a moment after the user stops typing. A session saved before there was such a choice
+    /// starts with it off.
+    #[serde(default)]
+    pub autosave: bool,
 }
 
 /// The preferences' name on a trail, where they go out as an output. A struct has one name, where an enum has one a variant.
@@ -20,7 +24,11 @@ impl From<&Preferences> for &'static str {
 
 impl Default for Preferences {
     fn default() -> Self {
-        Preferences { page_size: 3, word_count: false }
+        Preferences {
+            page_size: 3,
+            word_count: false,
+            autosave: false,
+        }
     }
 }
 
@@ -35,12 +43,15 @@ pub enum Intent {
     PageSize(usize),
     /// Turns the word count on or off.
     WordCount(bool),
+    /// Turns saving by itself on or off.
+    Autosave(bool),
 }
 
 /// What the preferences say, in a line.
 pub fn summary(preferences: &Preferences) -> String {
     let words = if preferences.word_count { "on" } else { "off" };
-    format!("{} to a page, the word count {words}", preferences.page_size)
+    let saving = if preferences.autosave { ", saving by itself" } else { "" };
+    format!("{} to a page, the word count {words}{saving}", preferences.page_size)
 }
 
 /// The fewest and most documents a page lists.
@@ -58,6 +69,7 @@ impl Feature for Settings {
         match intent {
             Intent::PageSize(size) => preferences.page_size = size.clamp(*PAGE_SIZES.start(), *PAGE_SIZES.end()),
             Intent::WordCount(on) => preferences.word_count = on,
+            Intent::Autosave(on) => preferences.autosave = on,
         }
         if *preferences != before {
             effects.emit(*preferences);

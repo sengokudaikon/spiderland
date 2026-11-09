@@ -93,6 +93,20 @@ Or number the requests with `Latest`, kept in the state, so the reducer counts o
 Saves of one thing shouldn't overlap. Keep a `OneAtATime` in the state: the reducer asks it for each save, starts the one it gives
 back, and calls `done` when a save's answer comes. The latest save asked for meanwhile waits, in place of any before it.
 
+**Writes as the user edits**
+
+A document that saves by itself is `OneAtATime` and a debounce together, each in the state:
+
+- Count the edits. A subscription keyed on the count waits a moment, so each edit starts the wait again, and its answer saves
+  only if no edit came since.
+- The save goes through `OneAtATime`. An edit during a write waits, and goes next.
+- Count the saves that failed in a row. A subscription keyed on the count tries again a while later, a few times, then leaves the
+  error showing.
+- A close with edits not yet written writes them, and the document answers once the write is in. A write that fails keeps the
+  window, with its error.
+
+`Latest` is the wrong tool for writes. It drops an old answer, but not the old write, which can land after a newer one.
+
 **Work with no result**
 
 Work on the pool that panics, that the pool refuses, or that the pool lets go of before it runs, arrives as `Err` of an `Error`
