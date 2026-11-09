@@ -75,6 +75,9 @@ impl<T: Clone + PartialEq + 'static> Rows<T> {
     /// Updates the list to `rows`, matching by `key` rather than by position. A row whose key is kept keeps its instance, and with it
     /// its focus and whatever is being typed there, when rows around it come or go. A row that changes place is rebuilt. Keys should
     /// be unique: of rows sharing a key, the first of them is matched first.
+    ///
+    /// Rows that keep their order cost one pass. Each row that moves, or comes in before others, costs a pass over the rows after
+    /// it, so reordering a long list all at once takes time that grows with the square of its length.
     pub fn sync_by<K: Eq + Hash>(&self, key: impl Fn(&T) -> K, rows: impl IntoIterator<Item = T>) {
         let rows: Vec<T> = rows.into_iter().collect();
         let wanted: HashSet<K> = rows.iter().map(&key).collect();

@@ -67,6 +67,10 @@ where
 /// Children answer through their outputs, which [`build`](crate::Wiring::children) forwards to the parent. A parent asking them
 /// to close counts the answers with a [`Closing`](crate::Closing).
 ///
+/// Each batch compares every key wanted with every child kept, changed or not, so its time grows with the square of their
+/// number. That suits up to about a thousand children. In a release build, a batch with a hundred spends several microseconds
+/// here, and one with a thousand about a third of a millisecond.
+///
 /// Pages on a stack, the last one shown:
 ///
 /// ```

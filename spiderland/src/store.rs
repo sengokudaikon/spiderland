@@ -734,6 +734,10 @@ impl<F: Feature> Store<F> {
     /// another store keeps a copy of, such as settings: an output is heard only by those listening when it goes out, but a store
     /// connected later starts on the current value. It ends with whichever store goes first.
     ///
+    /// A store being built hears the first value as an intent once it has started, after its [`Feature::start`]. One that loads
+    /// on start would load once on its own defaults first. Build its state on the current value instead, read with
+    /// [`Store::try_read`], and the first value shared changes nothing.
+    ///
     /// After each batch, the projection is made again and compared with the last one sent, so keep it cheap: a few fields, not a
     /// whole list.
     pub fn share<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static)
@@ -974,7 +978,8 @@ impl<F: Feature> Wiring<F> {
         self.0.connect(to, map)
     }
 
-    /// [`Store::share`]. The first value goes out after the first render, once [`Feature::start`] has run.
+    /// [`Store::share`]. The first value goes out after the first render, once [`Feature::start`] has run, so build the state on
+    /// the current value for the start to see it.
     pub fn share<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static)
     where
         T: PartialEq + 'static,

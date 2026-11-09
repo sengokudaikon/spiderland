@@ -556,6 +556,11 @@ fn a_library_restored_from_its_session_starts_where_it_left_off() {
         matches!(&effects[..], [library::Effect::Search { page: 1, .. }, library::Effect::OpenWindow(DocId(6))]),
         "{effects:?}"
     );
+    restored.send(library::Intent::Preferences(Preferences::default()));
+    assert!(
+        restored.take_effects().is_empty(),
+        "built on the preferences shared, it doesn't search again when they come"
+    );
     assert_eq!(restored.read(library::session), session, "it saves the same again");
     assert_eq!(restored.read(library::pages), [(DocId(4), Standing::Shown)], "the history page opens again, shown");
     assert_eq!(restored.read(library::documents), [(DocId(6), Standing::Shown)], "and so does the document");

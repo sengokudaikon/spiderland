@@ -216,7 +216,9 @@ impl Opened {
                 background: background.clone(),
             },
         };
-        let wiring = Store::<Document>::build(document::State::new(id, settings::Preferences::default()), host);
+        // It starts on the preferences as they are, so the first one shared changes nothing.
+        let preferences = settings.try_read(|preferences| *preferences).unwrap_or_default();
+        let wiring = Store::<Document>::build(document::State::new(id, preferences), host);
         wiring.observe(trail.follow(format!("document {}", id.0), document::status));
         settings.share(&wiring.intents(), |preferences| *preferences, |preferences| document::Intent::Preferences(*preferences));
         wiring.forward(library, move |output| library::Intent::Document(id, *output));
