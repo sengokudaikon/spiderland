@@ -6,7 +6,7 @@
 use crate::export::{self, Export};
 use crate::service::DocId;
 use crate::settings::Preferences;
-use spiderland::{CloseAnswer, Effects, Error, Feature, Lifecycle, OneAtATime, Pulse};
+use spiderland::{CloseAnswer, Effects, Error, Feature, Instance, Lifecycle, OneAtATime, Pulse, Slot};
 
 /// The feature.
 #[derive(Debug)]
@@ -69,8 +69,9 @@ pub struct State {
     pub close: Pulse,
     /// Why the last save, export or delete failed.
     pub error: Option<String>,
-    /// The export under way, a feature of its own. Back to `None`, its work stops.
-    pub export: Option<export::State>,
+    /// The export under way, a feature of its own. Stopped, its work stops, and what it sends after that is let go, even once
+    /// another export has started.
+    pub export: Slot<export::State>,
     /// The question shown.
     pub asking: Option<Ask>,
     /// Whether a close waits for a save to finish before the windows close.
@@ -99,7 +100,7 @@ impl State {
             toast: Pulse::new(String::new()),
             close: Pulse::default(),
             error: None,
-            export: None,
+            export: Slot::default(),
             asking: None,
             closing: false,
             leaving: false,
@@ -139,8 +140,8 @@ pub enum Intent {
     Saved(Result<Result<u32, String>, Error>),
     /// Starts an export.
     Export,
-    /// What the export under way hears.
-    Exporting(export::Intent),
+    /// What an export hears, for the start it was sent for.
+    Exporting(Instance, export::Intent),
     /// Stops the export under way.
     StopExport,
     /// Asks to delete the document.
@@ -193,8 +194,8 @@ impl From<Lifecycle> for Intent {
 pub enum Running {
     /// Hears when another program changes a document.
     Watching,
-    /// The export's work.
-    Export(export::Steps),
+    /// An export's work, for one start of it.
+    Export(Instance, export::Steps),
 }
 
 impl Feature for Document {
@@ -229,25 +230,27 @@ impl Feature for Document {
             Intent::Save => save(state, effects),
             Intent::Saved(result) => saved(state, result, effects),
             Intent::Export => {
-                if state.export.is_none() {
-                    let export = state.export.insert(export::State::default());
+                if !state.export.is_running() {
+                    let (_, export) = state.export.start(export::State::default());
                     effects.start_child::<Export>(export, |never| match never {});
                 }
             }
-            // An intent for an export that has stopped is let go.
-            Intent::Exporting(intent) => {
-                let Some(export) = state.export.as_mut() else {
+            // An intent for an export that has stopped, or for one before the one under way, is let go.
+            Intent::Exporting(instance, intent) => {
+                let Some(export) = state.export.get_mut(instance) else {
                     return;
                 };
                 for ended in effects.reduce_child::<Export>(export, intent, |never| match never {}) {
-                    state.export = None;
+                    state.export.stop();
                     match ended {
                         export::Output::Finished => state.toast.fire("Exported".to_owned()),
                         export::Output::Failed(why) => state.error = Some(why),
                     }
                 }
             }
-            Intent::StopExport => state.export = None,
+            Intent::StopExport => {
+                state.export.stop();
+            }
             Intent::Delete => state.asking = Some(Ask::Delete),
             Intent::Answer(choice) => answer(state, choice, effects),
             Intent::Deleted(Ok(Ok(()))) => {
@@ -278,7 +281,8 @@ impl Feature for Document {
 
     fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
         let watching = (!state.deleted).then_some(Running::Watching);
-        watching.into_iter().chain(state.export.iter().flat_map(Export::subscriptions).map(Running::Export))
+        let exporting = state.export.subscriptions::<Export>().map(|(instance, steps)| Running::Export(instance, steps));
+        watching.into_iter().chain(exporting)
     }
 }
 
@@ -364,7 +368,7 @@ fn answer(state: &mut State, choice: Choice, effects: &mut Effects<Effect, Outpu
 /// Closes the windows, and stops an export under way. The document says it has closed once no save is under way.
 fn close(state: &mut State, effects: &mut Effects<Effect, Output>) {
     state.close.fire(());
-    state.export = None;
+    state.export.stop();
     state.leaving = true;
     settle(state, effects);
 }

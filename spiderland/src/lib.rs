@@ -114,7 +114,8 @@
 //! - **Whole-view recomputes.** [`Tracked`] and [`Slice`] let a render redo only the parts whose inputs changed.
 //! - **Scope machinery.** A child is a state inside a state. A parent's `reduce` hands a child feature its state and intent with
 //!   [`Effects::reduce_child`], which wraps its effects and hands back what it emits, or a scope its [`Effects::scoped`]. A
-//!   child that ends is an `Option` going back to `None`, which stops what it runs.
+//!   child is kept in a [`Slot`], which numbers each start, so what is sent for a child that was stopped is let go. Stopped,
+//!   it stops what it runs.
 
 mod background;
 mod children;
@@ -124,6 +125,7 @@ mod macros;
 mod pulse;
 mod requests;
 mod saved;
+mod slot;
 mod store;
 mod subscriptions;
 mod test_store;
@@ -137,6 +139,7 @@ pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::{Fired, Pulse};
 pub use requests::{Asked, Latest, OneAtATime};
 pub use saved::Saved;
+pub use slot::{Instance, Slot};
 pub use store::{Attached, Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, View, WeakStore, Wiring, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
 pub use test_store::TestStore;

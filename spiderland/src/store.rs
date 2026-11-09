@@ -154,16 +154,21 @@ impl<E, O> Effects<E, O> {
     /// state, emit an output of its own, or let it go.
     ///
     /// The rest of a child inside its parent:
-    /// - Its intents: the parent has an intent that wraps the child's, and hands it on here.
-    /// - Its subscriptions: the parent's [`Feature::subscriptions`] wraps the child's. A child kept in an `Option` stops
-    ///   what it runs once it goes back to `None`, with nothing to cancel.
+    /// - Its state: kept in a [`Slot`](crate::Slot), which numbers each start with an [`Instance`](crate::Instance).
+    /// - Its intents: the parent has an intent that wraps the child's with its instance, and hands it on here only while
+    ///   [`Slot::get_mut`](crate::Slot::get_mut) finds that instance. So an answer for a child that was stopped is let go, even
+    ///   once another has started.
+    /// - Its effects: `wrap` puts the instance in each, so the host sends the answer back with it.
+    /// - Its subscriptions: the parent's [`Feature::subscriptions`] wraps [`Slot::subscriptions`](crate::Slot::subscriptions),
+    ///   which keys them on the instance. A child stopped stops what it runs, with nothing to cancel, and one started again gets
+    ///   its own.
     /// - Its host: the parent's host keeps the child's, and calls it with [`Intents::map`], so what it sends comes back
-    ///   wrapped.
+    ///   wrapped, with its instance.
     ///
-    /// An upload inside a page, which the page drops to stop it:
+    /// An upload inside a page, which the page stops and starts again:
     ///
     /// ```
-    /// use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+    /// use spiderland::{Effects, Feature, Host, Instance, Intents, Never, Slot, Store};
     /// use std::any::Any;
     /// use std::{cell::RefCell, rc::Rc};
     ///
@@ -197,17 +202,17 @@ impl<E, O> Effects<E, O> {
     /// struct Page;
     /// #[derive(Default)]
     /// struct PageState {
-    ///     upload: Option<u32>,
+    ///     upload: Slot<u32>,
     ///     done: bool,
     /// }
     /// enum PageIntent {
     ///     Start,
     ///     Stop,
-    ///     Upload(UploadIntent),
+    ///     Upload(Instance, UploadIntent),
     /// }
     /// #[derive(PartialEq)]
     /// enum Running {
-    ///     Upload(Sending),
+    ///     Upload(Instance, Sending),
     /// }
     /// impl Feature for Page {
     ///     type State = PageState;
@@ -218,14 +223,18 @@ impl<E, O> Effects<E, O> {
     ///
     ///     fn reduce(state: &mut PageState, intent: PageIntent, effects: &mut Effects<Never>) {
     ///         match intent {
-    ///             PageIntent::Start => state.upload = Some(0),
-    ///             PageIntent::Stop => state.upload = None,
-    ///             PageIntent::Upload(intent) => {
-    ///                 // An intent for an upload that is gone is let go.
-    ///                 let Some(upload) = state.upload.as_mut() else { return };
+    ///             PageIntent::Start => {
+    ///                 state.upload.start(0);
+    ///             }
+    ///             PageIntent::Stop => {
+    ///                 state.upload.stop();
+    ///             }
+    ///             PageIntent::Upload(instance, intent) => {
+    ///                 // An intent for an upload stopped, or for one before this one, is let go.
+    ///                 let Some(upload) = state.upload.get_mut(instance) else { return };
     ///                 let ended = effects.reduce_child::<Upload>(upload, intent, |never| match never {});
     ///                 if !ended.is_empty() {
-    ///                     state.upload = None;
+    ///                     state.upload.stop();
     ///                     state.done = true;
     ///                 }
     ///             }
@@ -233,7 +242,7 @@ impl<E, O> Effects<E, O> {
     ///     }
     ///
     ///     fn subscriptions(state: &PageState) -> impl IntoIterator<Item = Running> {
-    ///         state.upload.iter().flat_map(Upload::subscriptions).map(Running::Upload)
+    ///         state.upload.subscriptions::<Upload>().map(|(instance, key)| Running::Upload(instance, key))
     ///     }
     /// }
     ///
@@ -249,25 +258,31 @@ impl<E, O> Effects<E, O> {
     ///     }
     /// }
     ///
-    /// /// The page's host runs the upload's.
+    /// /// The page's host runs the upload's, and sends what it sends back with its instance.
     /// struct PageHost(UploadHost);
     /// impl Host<Page> for PageHost {
     ///     fn perform(&mut self, effect: Never, _: &Intents<PageIntent>) {
     ///         match effect {}
     ///     }
     ///     fn subscribe(&mut self, key: &Running, intents: &Intents<PageIntent>) -> Box<dyn Any> {
-    ///         match key {
-    ///             Running::Upload(key) => self.0.subscribe(key, &intents.map(PageIntent::Upload)),
+    ///         match *key {
+    ///             Running::Upload(instance, ref key) => self.0.subscribe(key, &intents.map(move |intent| PageIntent::Upload(instance, intent))),
     ///         }
     ///     }
     /// }
     ///
     /// let worker = Rc::new(RefCell::new(None));
     /// let page = Store::new(PageState::default(), PageHost(UploadHost(Rc::clone(&worker))));
+    /// let shown = |page: &Store<Page>| page.try_read(|state| (state.upload.get().copied(), state.done)).unwrap();
     /// page.send(PageIntent::Start);
-    /// let sent = worker.borrow().clone().expect("the upload runs");
-    /// sent.send(UploadIntent::Sent(3));
-    /// assert_eq!(page.try_read(|state| (state.upload, state.done)), Some((None, true)));
+    /// let first = worker.borrow().clone().expect("the upload runs");
+    /// // Stopped and started again in one batch, the upload gets its work afresh.
+    /// page.send_all([PageIntent::Stop, PageIntent::Start]);
+    /// let second = worker.borrow().clone().expect("the second upload runs");
+    /// first.send(UploadIntent::Sent(3));
+    /// assert_eq!(shown(&page), (Some(0), false), "what the first upload's worker sends late is let go");
+    /// second.send(UploadIntent::Sent(3));
+    /// assert_eq!(shown(&page), (None, true));
     /// ```
     pub fn reduce_child<C: Feature>(&mut self, state: &mut C::State, intent: C::Intent, wrap: impl Fn(C::Effect) -> E) -> Vec<C::Output> {
         let mut effects = Effects::detached();

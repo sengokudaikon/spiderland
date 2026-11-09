@@ -345,19 +345,39 @@ fn a_save_that_fails_after_the_windows_closed_asks_for_a_window() {
 fn an_export_reports_progress_and_stops_when_asked() {
     let doc = loaded("Alpha", "a");
     doc.send(document::Intent::Export);
-    assert!(doc.is_running(&Running::Export(Steps)), "the export runs inside the document");
-    doc.send(document::Intent::Exporting(export::Intent::Progress(2)));
-    assert_eq!(doc.read(|state| state.export.map(|export| export.done)), Some(2));
+    let first = doc.read(|state| state.export.instance()).expect("an export under way");
+    assert!(doc.is_running(&Running::Export(first, Steps)), "the export runs inside the document");
+    doc.send(document::Intent::Exporting(first, export::Intent::Progress(2)));
+    assert_eq!(doc.read(|state| state.export.get().map(|export| export.done)), Some(2));
 
     doc.send(document::Intent::StopExport);
-    assert!(!doc.is_running(&Running::Export(Steps)), "dropping the export stops its work");
-    doc.send(document::Intent::Exporting(export::Intent::Progress(3)));
-    assert_eq!(doc.read(|state| state.export), None, "and what it sent after that is let go");
+    assert!(!doc.is_running(&Running::Export(first, Steps)), "stopping the export stops its work");
+    doc.send(document::Intent::Exporting(first, export::Intent::Progress(3)));
+    assert!(!doc.read(|state| state.export.is_running()), "and what it sent after that is let go");
 
     doc.send(document::Intent::Export);
-    doc.send(document::Intent::Exporting(export::Intent::Exported(Ok(true))));
-    assert_eq!(doc.read(|state| (state.export, state.toast.value().clone())), (None, "Exported".to_owned()));
-    assert!(!doc.is_running(&Running::Export(Steps)));
+    let second = doc.read(|state| state.export.instance()).expect("another export under way");
+    assert!(doc.is_running(&Running::Export(second, Steps)), "it runs under a key of its own");
+    doc.send(document::Intent::Exporting(first, export::Intent::Progress(3)));
+    assert_eq!(
+        doc.read(|state| state.export.get().map(|export| export.done)),
+        Some(0),
+        "what the first export sends late doesn't reach the second"
+    );
+    doc.send(document::Intent::Exporting(second, export::Intent::Exported(Ok(true))));
+    assert_eq!(doc.read(|state| (state.export.is_running(), state.toast.value().clone())), (false, "Exported".to_owned()));
+    assert!(!doc.is_running(&Running::Export(second, Steps)));
+}
+
+#[test]
+fn an_export_stopped_and_started_in_one_batch_gets_its_work_afresh() {
+    let doc = loaded("Alpha", "a");
+    doc.send(document::Intent::Export);
+    let first = doc.read(|state| state.export.instance()).expect("an export under way");
+    doc.send_all([document::Intent::StopExport, document::Intent::Export]);
+    let second = doc.read(|state| state.export.instance()).expect("another export under way");
+    assert!(!doc.is_running(&Running::Export(first, Steps)), "the first export's work stopped");
+    assert!(doc.is_running(&Running::Export(second, Steps)));
 }
 
 /// Scenario 6.
@@ -462,7 +482,8 @@ fn failures_show_in_the_state_and_the_store_goes_on() {
     assert_eq!(doc.take_outputs(), [document::Output::Changed]);
 
     doc.send(document::Intent::Export);
-    doc.send(document::Intent::Exporting(export::Intent::Exported(Err(Error::Panicked))));
+    let export = doc.read(|state| state.export.instance()).expect("an export under way");
+    doc.send(document::Intent::Exporting(export, export::Intent::Exported(Err(Error::Panicked))));
     assert_eq!(doc.read(document::status), "The export failed: background work panicked.");
 
     let library = started_library();

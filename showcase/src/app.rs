@@ -440,8 +440,8 @@ impl Host<Document> for DocumentHost {
                 let seen = changes.clone();
                 Box::new(on_watch(changes, intents, move || document::Intent::ChangedOutside(*seen.borrow())))
             }
-            // What the export's host sends comes back wrapped as the document's.
-            Running::Export(steps) => self.export.subscribe(&steps, &intents.map(document::Intent::Exporting)),
+            // What the export's host sends comes back wrapped as the document's, with the start it is for.
+            Running::Export(instance, steps) => self.export.subscribe(&steps, &intents.map(move |intent| document::Intent::Exporting(instance, intent))),
         }
     }
 }
@@ -525,7 +525,7 @@ fn paint(window: &EditorWindow, state: &document::State, view: &mut EditorView) 
         }
         .into(),
     );
-    window.set_exporting(state.export.is_some());
-    window.set_export_done(state.export.map_or(0, |export| export.done as i32));
+    window.set_exporting(state.export.is_running());
+    window.set_export_done(state.export.get().map_or(0, |export| export.done as i32));
     window.set_export_of(EXPORT_STEPS as i32);
 }

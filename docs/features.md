@@ -44,6 +44,7 @@
 | `Background::pending` | Counts work whose result hasn't come back yet, for a test to wait on. |
 | `Latest`, `Asked` | Numbers requests in the state, so that only the answer to the latest one counts. |
 | `OneAtATime` | Keeps work one at a time in the state, such as saves: the latest asked for waits while one runs. |
+| `Slot`, `Instance` | Keeps a child feature in its parent's state and numbers each start, so what is sent for a child that was stopped is let go, and one started again gets its work afresh. |
 | `on_watch`, `on_wake` | Let a service on another thread tell a feature that something changed. `Listening` is their guard, and `on_wake`'s `Waker` fires it. |
 | `EventLoop` | The one thing `Background` and the listeners need from a toolkit: running a future on the UI thread. |
 | `Effects::scoped` | Runs a child scope's reducer inside its parent's. |

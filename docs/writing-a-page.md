@@ -140,18 +140,26 @@ row's model: its list is built again, and focus inside it is lost. `fill_by` kee
 **A child feature inside a page**
 
 A part of a page with rules of its own, such as an export and its progress, can be a `Feature` of its own and still run in the
-page's store. The parent keeps the child's state, often in an `Option`, and maps the rest:
+page's store. The parent keeps the child's state in a `Slot`, which numbers each start with an `Instance`, and maps the rest
+with that number:
 
-- Intents: the parent has one that wraps the child's, and hands each on with
-  `effects.reduce_child::<Export>(export, intent, Effect::Export)`. The child's effects come back wrapped. What it emits comes back
-  to the parent's `reduce`, which decides what it means. `effects.start_child` runs the child's `start` as the parent makes it.
+- Intents: the parent has one that wraps the child's with its instance, as in `Intent::Exporting(instance, intent)`. It finds the
+  child with `state.export.get_mut(instance)` and hands the intent on with
+  `effects.reduce_child::<Export>(export, intent, |effect| Effect::Export(instance, effect))`. What the child emits comes back to
+  the parent's `reduce`, which decides what it means. `effects.start_child` runs the child's `start` on what `Slot::start`
+  returns.
 - Subscriptions: the parent's `subscriptions` wraps the child's, as in
-  `state.export.iter().flat_map(Export::subscriptions).map(Running::Export)`. Set back to `None`, the child stops what it runs,
-  with nothing to cancel.
-- Host: the parent's host keeps the child's, and calls it with `intents.map(Intent::Export)`, so what its work sends comes back
-  wrapped.
+  `state.export.subscriptions::<Export>().map(|(instance, key)| Running::Export(instance, key))`. Stopped, the child stops what
+  it runs, with nothing to cancel.
+- Host: the parent's host keeps the child's, and calls it with
+  `intents.map(move |intent| Intent::Exporting(instance, intent))`, so what its work sends comes back wrapped, with the instance
+  it is for.
 
-An intent for a child that is gone finds `None`, and the parent lets it go.
+`get_mut` finds nothing for an instance that was stopped, so the parent lets its intent go, even once another has started. Work
+that a subscription runs stops with its child. An answer from work that can't be stopped, such as `Background::run`, or from a
+sender the child's host kept, would otherwise reach the next child. Keying the subscriptions on the instance matters too: a child
+stopped and started again in one batch would keep the same key, and with it the old work. `Latest` doesn't serve here: it counts
+only the first answer to a request, and a child hears many.
 
 **Children a parent keeps**
 

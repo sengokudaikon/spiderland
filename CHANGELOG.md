@@ -83,6 +83,11 @@ tag makes a GitHub release from that version's section.
 - `spiderland`: `Store::share_scoped` and `Store::observe_scoped`, and the same on `Wiring`. Each returns a `Connection`, and
   dropping it ends the share or the observer at once, while both stores go on. `share` and `observe` stay as they were, for as
   long as the stores live.
+- `spiderland`: `Slot` and `Instance`, for a child feature inside its parent's state. Each start is numbered, and the parent
+  carries the number in the child's intents, effects and subscription keys. So what is sent for a child that was stopped is let
+  go, even once another has started, and a child stopped and started again in one batch gets its work afresh. A child kept in an
+  `Option` still works, but an answer from work that can't be stopped, or from a sender its host kept, reaches the next child:
+  move it to a `Slot` as `Effects::reduce_child`'s example shows.
 - `spiderland`: `Saved`, `Store::save_in` and `Wiring::save_in`, so each store saves its part of the session under a key, in a
   form the app picks, as the app says when. On the next start, each store takes its part back as it is built, and a child its
   own by its key.
