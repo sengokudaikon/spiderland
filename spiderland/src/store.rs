@@ -933,6 +933,11 @@ impl<F: Feature> Store<F> {
     pub(crate) fn is_running(&self, key: &F::Subscription) -> bool {
         self.0.subscriptions.borrow().contains(key)
     }
+
+    /// Reads the guard the host returned for `key`, while it runs.
+    pub(crate) fn read_guard<T>(&self, key: &F::Subscription, read: impl FnOnce(Option<&dyn Any>) -> T) -> T {
+        read(self.0.subscriptions.borrow().guard(key))
+    }
 }
 
 /// A store that is built and not yet started, from [`Store::build`]. It is for wiring what listens to the store before

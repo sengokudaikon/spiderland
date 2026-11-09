@@ -50,6 +50,11 @@ impl<K: PartialEq> Subscriptions<K> {
     pub(crate) fn contains(&self, key: &K) -> bool {
         self.live.iter().any(|(live, _)| live == key)
     }
+
+    /// The guard of `key`, while it runs.
+    pub(crate) fn guard(&self, key: &K) -> Option<&dyn Any> {
+        self.live.iter().find(|(live, _)| live == key).map(|(_, guard)| &**guard)
+    }
 }
 
 #[cfg(test)]

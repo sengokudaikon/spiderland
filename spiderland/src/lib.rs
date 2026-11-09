@@ -142,6 +142,6 @@ pub use saved::Saved;
 pub use slot::{Instance, Slot};
 pub use store::{Attached, Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, View, WeakStore, Wiring, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
-pub use test_store::TestStore;
+pub use test_store::{Subscribed, TestStore};
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};
 pub use wake::{Dropping, Listening, Waker, on_wake, on_watch};

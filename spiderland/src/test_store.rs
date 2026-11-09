@@ -1,6 +1,6 @@
 use crate::{Feature, Host, Intents, Store};
 use std::any::{Any, type_name};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::Rc;
 
@@ -15,7 +15,9 @@ const ROUNDS: usize = 100;
 ///   those [`Feature::start`] asked for too.
 /// - **Renders** are kept as what `show` makes of each state, the first render included, for
 ///   [`take_renders`](TestStore::take_renders). [`TestStore::new`] keeps `()`, which counts them.
-/// - **Subscriptions** start nothing. [`is_running`](TestStore::is_running) says whether the store has started a key.
+/// - **Subscriptions** start nothing. [`is_running`](TestStore::is_running) says whether the store has started a key, and
+///   [`subscribed`](TestStore::subscribed) hands the test that start, to answer through as its work would. What it sends once
+///   the store has stopped it goes nowhere, and a key stopped and started again is a start of its own.
 /// - **Outputs** are kept for [`take_outputs`](TestStore::take_outputs), once whatever the test forwards them to through
 ///   [`store`](TestStore::store) has heard them. Unlike an effect, one left untaken doesn't fail the test.
 ///
@@ -73,6 +75,8 @@ struct Kept<F: Feature, R> {
     effects: Vec<F::Effect>,
     outputs: Vec<F::Output>,
     renders: Vec<R>,
+    /// How many subscriptions have started.
+    started: u64,
 }
 
 /// What a render keeps of the state.
@@ -94,8 +98,80 @@ impl<F: Feature, R: 'static> Host<F> for Keeping<F, R> {
         self.kept.borrow_mut().effects.push(effect);
     }
 
-    fn subscribe(&mut self, _: &F::Subscription, _: &Intents<F::Intent>) -> Box<dyn Any> {
-        Box::new(())
+    fn subscribe(&mut self, _: &F::Subscription, intents: &Intents<F::Intent>) -> Box<dyn Any> {
+        let mut kept = self.kept.borrow_mut();
+        kept.started += 1;
+        Box::new(Started(Subscribed {
+            start: kept.started,
+            intents: intents.clone(),
+            running: Rc::new(Cell::new(true)),
+        }))
+    }
+}
+
+/// One start of a subscription under a [`TestStore`], from [`TestStore::subscribed`]. It sends as the work it stands for would,
+/// through the sender the host was given, until the store stops it. From then on, what it sends goes nowhere, as from work that
+/// was stopped.
+///
+/// Two are equal when they are the same start. So a test can tell a subscription that went on, such as one whose key stayed
+/// through a batch, from one that was stopped and started again.
+pub struct Subscribed<I> {
+    start: u64,
+    intents: Intents<I>,
+    running: Rc<Cell<bool>>,
+}
+
+impl<I> Subscribed<I> {
+    /// Sends `intent` to the store, as the work would, while this start runs. Once the store has stopped it, it does nothing.
+    pub fn send(&self, intent: I) {
+        if self.running.get() {
+            self.intents.send(intent);
+        }
+    }
+
+    /// Sends `intents` as one batch, as [`Intents::send_all`] does, while this start runs.
+    pub fn send_all(&self, intents: impl IntoIterator<Item = I>) {
+        if self.running.get() {
+            self.intents.send_all(intents);
+        }
+    }
+
+    /// True until the store stops this start.
+    pub fn is_running(&self) -> bool {
+        self.running.get()
+    }
+}
+
+impl<I> Clone for Subscribed<I> {
+    fn clone(&self) -> Self {
+        Subscribed {
+            start: self.start,
+            intents: self.intents.clone(),
+            running: Rc::clone(&self.running),
+        }
+    }
+}
+
+impl<I> PartialEq for Subscribed<I> {
+    fn eq(&self, other: &Self) -> bool {
+        self.start == other.start
+    }
+}
+
+impl<I> Eq for Subscribed<I> {}
+
+impl<I> fmt::Debug for Subscribed<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Subscribed").field("start", &self.start).field("running", &self.running.get()).finish()
+    }
+}
+
+/// The guard the test's host returns. The store drops it to stop the subscription.
+struct Started<I>(Subscribed<I>);
+
+impl<I> Drop for Started<I> {
+    fn drop(&mut self) {
+        self.0.running.set(false);
     }
 }
 
@@ -114,6 +190,7 @@ impl<F: Feature, R: 'static> TestStore<F, R> {
             effects: Vec::new(),
             outputs: Vec::new(),
             renders: Vec::new(),
+            started: 0,
         }));
         let host = Keeping::<F, R> {
             kept: Rc::clone(&kept),
@@ -180,6 +257,12 @@ impl<F: Feature, R: 'static> TestStore<F, R> {
     /// [`Feature::subscriptions`] wanted after the last batch.
     pub fn is_running(&self, key: &F::Subscription) -> bool {
         self.store.is_running(key)
+    }
+
+    /// The start of `key` that runs now, if the store has started it, to answer through as its work would.
+    pub fn subscribed(&self, key: &F::Subscription) -> Option<Subscribed<F::Intent>> {
+        self.store
+            .read_guard(key, |guard| guard?.downcast_ref::<Started<F::Intent>>().map(|started| started.0.clone()))
     }
 
     /// The store itself: to forward its outputs, observe it or ask it, or to hand its [`Intents`] to a view's callbacks.
@@ -355,6 +438,75 @@ mod tests {
         assert!(store.is_running(&()));
         store.send(Intent::Watch(false));
         assert!(!store.is_running(&()));
+    }
+
+    /// Loads what the query names, while it is on.
+    struct Loader;
+
+    #[derive(Debug, PartialEq)]
+    struct Load(&'static str);
+
+    enum Find {
+        Type(&'static str),
+        On(bool),
+        Found(&'static str),
+    }
+
+    #[derive(Default)]
+    struct Loading {
+        query: &'static str,
+        on: bool,
+        found: Vec<&'static str>,
+    }
+
+    impl Feature for Loader {
+        type State = Loading;
+        type Intent = Find;
+        type Effect = Never;
+        type Output = Never;
+        type Subscription = Load;
+
+        fn reduce(state: &mut Loading, intent: Find, _: &mut Effects<Never>) {
+            match intent {
+                Find::Type(query) => state.query = query,
+                Find::On(on) => state.on = on,
+                Find::Found(found) => state.found.push(found),
+            }
+        }
+
+        fn subscriptions(state: &Loading) -> impl IntoIterator<Item = Load> {
+            state.on.then_some(Load(state.query))
+        }
+    }
+
+    #[test]
+    fn a_subscription_answers_through_its_start_until_it_is_stopped() {
+        let store = TestStore::<Loader>::new(Loading::default());
+        assert!(store.subscribed(&Load("")).is_none(), "nothing runs yet");
+        store.send_all([Find::Type("a"), Find::On(true)]);
+        let first = store.subscribed(&Load("a")).expect("the load runs");
+        first.send(Find::Found("a1"));
+        store.send(Find::Type("ab"));
+        assert!(!first.is_running(), "a new query stopped the old load");
+        assert!(store.subscribed(&Load("a")).is_none());
+        first.send(Find::Found("late"));
+        let second = store.subscribed(&Load("ab")).expect("the new load runs");
+        second.send_all([Find::Found("ab1"), Find::Found("ab2")]);
+        assert_eq!(store.read(|state| state.found.clone()), ["a1", "ab1", "ab2"], "what the old load sent late went nowhere");
+    }
+
+    #[test]
+    fn a_key_stopped_and_started_again_is_a_start_of_its_own() {
+        let store = TestStore::<Loader>::new(Loading::default());
+        store.send(Find::On(true));
+        let first = store.subscribed(&Load("")).expect("the load runs");
+        store.send_all([Find::On(false), Find::On(true)]);
+        assert_eq!(store.subscribed(&Load("")), Some(first.clone()), "a key wanted again in the same batch went on");
+        store.send(Find::On(false));
+        store.send(Find::On(true));
+        let again = store.subscribed(&Load("")).expect("the load runs again");
+        assert_ne!(again, first, "stopped in one batch and started in the next, it is a start of its own");
+        assert!(!first.is_running() && again.is_running());
     }
 
     #[test]

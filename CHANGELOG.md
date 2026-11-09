@@ -88,6 +88,9 @@ tag makes a GitHub release from that version's section.
   go, even once another has started, and a child stopped and started again in one batch gets its work afresh. A child kept in an
   `Option` still works, but an answer from work that can't be stopped, or from a sender its host kept, reaches the next child:
   move it to a `Slot` as `Effects::reduce_child`'s example shows.
+- `spiderland`: `TestStore::subscribed` and `Subscribed`, the start of a running subscription for a test to answer through as
+  its work would. What it sends once the store has stopped it goes nowhere, and starts compare equal only to themselves, so a
+  test can see a load replaced, a late answer dropped, and a key stopped and started again.
 - `spiderland`: `Saved`, `Store::save_in` and `Wiring::save_in`, so each store saves its part of the session under a key, in a
   form the app picks, as the app says when. On the next start, each store takes its part back as it is built, and a child its
   own by its key.

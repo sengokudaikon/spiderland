@@ -54,6 +54,7 @@
 | `start` | Runs `Feature::start` in a test, with no host, and returns its effects. |
 | `subscriptions` | Lists what a state wants running, in a test, with no host. |
 | `TestStore` | Runs the whole loop in a test. Each effect waits for the test to take it or answer it, and one left waiting fails the test. It keeps renders and outputs too. |
+| `TestStore::subscribed`, `Subscribed` | The start of a subscription that runs, to answer through as its work would. It goes quiet once the store stops it, and a key started again is a start of its own. |
 | `callbacks!` | Maps a view's callbacks to intents, one per line. |
 
 ## Slint host: `spiderland-slint`
