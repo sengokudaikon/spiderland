@@ -6,8 +6,9 @@
 /// [`CloseAnswer`] of its own, whenever it is ready, and the parent's [`Closing`] counts the answers. When the window stays after
 /// all, the parent tells its children with [`Lifecycle::CloseCalledOff`].
 ///
-/// A parent whose children are stores it keeps in [`Children`](crate::Children) says where each [`Standing`](crate::Standing)
-/// in its state, and the store sends each change. A parent can also emit [`Lifecycle`] as an output and forward it, as here.
+/// A parent whose children are stores it keeps in [`Children`](crate::Children) says in its state where each one stands, as a
+/// [`Standing`](crate::Standing), and its store sends each change. A parent can also emit [`Lifecycle`] as an output and forward
+/// it, as here.
 ///
 /// A window that closes once its editor has saved:
 ///

@@ -362,6 +362,12 @@ fn closing_the_library_waits_for_every_document(headless: &Headless) {
     assert!(!library.window().is_visible(), "and closes once it is in");
     assert_eq!(scene.service.get(DocId(1)).unwrap().body, "the first draft again");
     assert!(scene.app.document(DocId(1)).is_none(), "the library let the document go");
+    drop(scene);
+
+    // With no document open, it closes at once, from inside its own close.
+    let scene = Scene::start(headless);
+    scene.library().close();
+    assert!(!scene.app.library().window().is_visible());
 }
 
 /// Scenario 11.
