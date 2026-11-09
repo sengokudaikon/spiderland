@@ -38,7 +38,7 @@
 | `Background::wait` | Awaits an answer on the UI thread, with no pool thread held, and sends it back as an intent. |
 | `Background::local` | Awaits work on the UI thread that can be dropped at any moment, even from inside its own result. `Dropping` is its guard. |
 | `Background::finish` | Awaits work on the UI thread that nothing the caller holds can stop, for a result that must be heard. |
-| `Background::stoppable`, `Stop`, `Progress`, `Stopping` | Runs work on the app's pool that stops when its guard is dropped, such as by a subscription, and reports progress as intents. |
+| `Background::stoppable`, `Stop`, `Progress`, `Stopping` | Runs work on the app's pool that stops when its guard is dropped, such as by a subscription, and reports progress as intents. The work checks `Stop::is_stopped`, or waits on `Stop::stopped` alongside what else it waits on. |
 | `Background::pending` | Counts work whose result hasn't come back yet, for a test to wait on. |
 | `Latest`, `Asked` | Numbers requests in the state, so that only the answer to the latest one counts. |
 | `OneAtATime` | Keeps work one at a time in the state, such as saves: the latest asked for waits while one runs. |

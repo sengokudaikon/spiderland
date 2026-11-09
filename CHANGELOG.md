@@ -78,6 +78,8 @@ tag makes a GitHub release from that version's section.
   are each a shape of keys in the state. A child dropped stops what it runs, and an answer for it goes nowhere. `Child::tell`
   says how a child hears its lifecycle, and a `Store` whose intent is `From<Lifecycle>` has it.
 - `spiderland`: `Store::downgrade` and `WeakStore`, to hold a store without keeping it alive.
+- `spiderland`: `Stop::stopped`, a future that completes once the work's `Stopping` is dropped. Work that waits on something
+  else, such as a child process, waits on it too, and stops the moment it is asked, with no loop that checks `is_stopped`.
 - `spiderland`: `Seen::State`, the state just after each intent is reduced and as a store wired on a `Wiring` starts, and
   `Seen::Output`, each output just before it is heard. So a trail can record what each intent changed, and what a store told
   others. `&Never` converts into `&'static str`, so a trail that names its steps that way covers a feature with no effects or

@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::Context;
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
@@ -409,4 +409,60 @@ fn stoppable_work_the_pool_refuses_comes_back_at_once() {
     assert_eq!(shown.borrow().results, [Err(Error::Refused)]);
     assert_eq!(refusing.pending(), 0);
     drop(stopping);
+}
+
+/// Runs `future` on this thread until it is done, as work on the pool that waits on futures does.
+fn block_on<T>(future: impl Future<Output = T>) -> T {
+    struct Unpark(std::thread::Thread);
+    impl Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+            return value;
+        }
+        std::thread::park();
+    }
+}
+
+#[test]
+fn stoppable_work_waiting_on_something_else_wakes_once_it_is_stopped() {
+    let shown = Rc::default();
+    let store = Store::new(State::default(), Shown(Rc::clone(&shown)));
+    let background = pool();
+    // Stands for a child process the work waits on, which never exits on its own.
+    let (_child, exited) = oneshot::channel::<()>();
+    let (told, heard) = std::sync::mpsc::channel();
+    let stopping = background.stoppable(
+        &store.intents(),
+        move |stop, _: &spiderland::Progress<i32>| {
+            let (mut exited, mut stopped) = (exited, std::pin::pin!(stop.stopped()));
+            told.send("waiting").unwrap();
+            let woke = block_on(std::future::poll_fn(|context| {
+                if Pin::new(&mut exited).poll(context).is_ready() {
+                    return Poll::Ready("exited");
+                }
+                stopped.as_mut().poll(context).map(|()| "stopped")
+            }));
+            told.send(woke).unwrap();
+            assert!(stop.is_stopped());
+            block_on(stop.stopped());
+            told.send("a stop already over completes at once").unwrap();
+            1
+        },
+        |_| Intent::Woken,
+        Intent::Finished,
+    );
+    let next = || heard.recv_timeout(Duration::from_secs(10)).expect("the work to say");
+    assert_eq!(next(), "waiting");
+    drop(stopping);
+    assert_eq!(next(), "stopped");
+    assert_eq!(next(), "a stop already over completes at once");
+    until("nothing left to arrive", || background.pending() == 0);
+    assert!(shown.borrow().results.is_empty(), "what stopped work returns arrives nowhere");
 }

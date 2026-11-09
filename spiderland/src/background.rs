@@ -7,9 +7,9 @@ use std::future::poll_fn;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /// The loop that runs a UI thread's events, and futures between them. It is the one thing [`Background`] and the listeners
 /// need from a toolkit, and a host crate implements it once: `spiderland-slint`'s `Slint` hands each future to
@@ -139,8 +139,8 @@ impl<L: EventLoop> Background<L> {
     /// `work` is handed a [`Stop`] to check, and a [`Progress`] to report through. Each report goes to the store as
     /// `progress(report)`. Reports that come faster than the UI thread takes them are merged: the store hears the latest.
     ///
-    /// Dropping the returned [`Stopping`] stops it. The work sees that the next time it checks its [`Stop`], and nothing it sends
-    /// arrives after that, neither a report nor its result. That is safe at any moment, even while the store handles a report from
+    /// Dropping the returned [`Stopping`] stops it. The work sees that the next time it checks its [`Stop`], or at once if it waits
+    /// on [`Stop::stopped`], and nothing it sends arrives after that, neither a report nor its result. That is safe at any moment, even while the store handles a report from
     /// this very work. Work the pool refuses sends `then(Err(Error::Refused))` at once, as `run`'s does.
     ///
     /// ```
@@ -179,10 +179,10 @@ impl<L: EventLoop> Background<L> {
         P: Send + 'static,
         I: 'static,
     {
-        let stop = Stop(Arc::new(AtomicBool::new(false)));
+        let (stop, checked) = watch::channel(());
+        let checked = Stop(checked);
         let (report, mut reports) = mpsc::unbounded_channel();
         let (reply, mut replied) = oneshot::channel();
-        let checked = stop.clone();
         let job = Box::new(move || {
             let mut reply = Reply(Some(reply));
             let result = work(&checked, &Progress(report));
@@ -191,7 +191,7 @@ impl<L: EventLoop> Background<L> {
             }
         });
         let (guard, mut dropped) = oneshot::channel::<()>();
-        let stopping = Stopping { stop, guard };
+        let stopping = Stopping { _stop: stop, guard };
         if !(self.start)(job) {
             intents.send(then(Err(Error::Refused)));
             return stopping;
@@ -293,15 +293,46 @@ enum Heard<T, P> {
     Done(Result<T, Error>),
 }
 
-/// What work started by [`Background::stoppable`] checks, to know when to stop.
+/// What work started by [`Background::stoppable`] checks, or waits on, to know when to stop.
 #[derive(Clone, Debug)]
-pub struct Stop(Arc<AtomicBool>);
+pub struct Stop(watch::Receiver<()>);
 
 impl Stop {
     /// True once the work's [`Stopping`] has been dropped. Work checks it between steps and returns early, with whatever it has.
     /// Nothing it returns after that arrives anywhere.
     pub fn is_stopped(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.has_changed().is_err()
+    }
+
+    /// Completes once the work's [`Stopping`] has been dropped, at once if it already has. Work that waits on something else, such
+    /// as a child process, waits on this too, and stops the other the moment this completes. It polls the same from any executor
+    /// and any thread, so the work can wait on it with whatever runs its other futures.
+    ///
+    /// With an async runtime, a `select` over the two does it. By hand:
+    ///
+    /// ```
+    /// use spiderland::Stop;
+    /// use std::task::Poll;
+    ///
+    /// /// Waits for a child process to exit, and kills it if the work is stopped first.
+    /// async fn wait_or_kill(stop: &Stop, exited: impl Future<Output = ()>, kill: impl FnOnce()) {
+    ///     let (mut exited, mut stopped) = (std::pin::pin!(exited), std::pin::pin!(stop.stopped()));
+    ///     let stopped_first = std::future::poll_fn(|context| match exited.as_mut().poll(context) {
+    ///         Poll::Ready(()) => Poll::Ready(false),
+    ///         Poll::Pending => stopped.as_mut().poll(context).map(|()| true),
+    ///     })
+    ///     .await;
+    ///     if stopped_first {
+    ///         kill();
+    ///     }
+    /// }
+    /// ```
+    pub fn stopped(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut stop = self.0.clone();
+        async move {
+            // Nothing is ever sent, so this waits until the sender, which the `Stopping` holds, is dropped.
+            while stop.changed().await.is_ok() {}
+        }
     }
 }
 
@@ -327,8 +358,9 @@ impl<P> Progress<P> {
 #[derive(Debug)]
 #[must_use = "dropping it stops the work at once"]
 pub struct Stopping {
-    stop: Stop,
-    /// Dropped after the flag is set, which wakes the UI thread's side so it lets go.
+    /// Dropped first, which stops the work: its [`Stop`] reads as stopped, and what waits on it wakes.
+    _stop: watch::Sender<()>,
+    /// Dropped after the stop, which wakes the UI thread's side so it lets go.
     guard: oneshot::Sender<()>,
 }
 
@@ -336,11 +368,5 @@ impl Stopping {
     /// True once nothing of the work is left to arrive: it finished, the pool let go of it, or the pool refused it.
     pub fn is_finished(&self) -> bool {
         self.guard.is_closed()
-    }
-}
-
-impl Drop for Stopping {
-    fn drop(&mut self) {
-        self.stop.0.store(true, Ordering::Release);
     }
 }

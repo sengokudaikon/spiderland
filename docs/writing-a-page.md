@@ -84,6 +84,7 @@ fn subscriptions(state: &State) -> impl IntoIterator<Item = Running> {
 
 Work that `Background::run` starts on the pool can't be stopped. Start it with `Background::stoppable` from `subscribe` instead,
 and the store stops it when the key goes: the work checks its `Stop`, and can report how far it has got through its `Progress`.
+Work that waits, such as on a child process, waits on `Stop::stopped` as well, and stops what it waits on as soon as that completes.
 Or number the requests with `Latest`, kept in the state, so the reducer counts only the answer to the latest one.
 
 **One at a time**
