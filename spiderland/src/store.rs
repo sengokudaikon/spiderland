@@ -203,8 +203,11 @@ pub fn subscriptions<F: Feature>(state: &F::State) -> Vec<F::Subscription> {
 
 /// A feature's impure half: the view, the timers and the services.
 pub trait Host<F: Feature>: 'static {
-    /// Called once after each batch of intents. Should only do what the changed parts of the state need.
-    fn render(&mut self, state: &F::State, intents: &Intents<F::Intent>);
+    /// Called once after each batch of intents. Should only do what the changed parts of the state need. A host whose views
+    /// attach with [`Store::attach`], and so has no view of its own, leaves this out.
+    fn render(&mut self, state: &F::State, intents: &Intents<F::Intent>) {
+        let _ = (state, intents);
+    }
 
     /// Starts one effect. Work that finishes later sends its result through `intents`.
     fn perform(&mut self, effect: F::Effect, intents: &Intents<F::Intent>);
@@ -218,6 +221,31 @@ pub trait Host<F: Feature>: 'static {
         let _ = (key, intents);
         panic!("{} wants a subscription, and its host doesn't write `Host::subscribe`", std::any::type_name::<F>())
     }
+}
+
+/// A view that attaches to a store with [`Store::attach`], and can leave it while the store goes on, as a window on a document
+/// does. A store has one [`Host`], which runs its effects, and any number of views, which only show its state. A view that
+/// attaches late shows the state at once, so it needs no render of its own to catch up.
+///
+/// A view that shows a [`Pulse`](crate::Pulse) keeps a [`Fired`](crate::Fired) for it, so it doesn't act on a fire from before
+/// it attached.
+pub trait View<F: Feature>: 'static {
+    /// Shows `state`. Called as the view attaches, with the state as it is then, and after each batch while it stays attached,
+    /// after the host's own render. Should only do what the changed parts of the state need.
+    fn render(&mut self, state: &F::State, intents: &Intents<F::Intent>);
+
+    /// True once there is nothing left to show the state in, such as a window that has closed. The store then lets the view
+    /// go, as if its [`Attached`] were dropped. A view is never gone unless it says so.
+    fn is_gone(&self) -> bool {
+        false
+    }
+}
+
+/// One view attached to a store.
+struct Viewing<F: Feature> {
+    view: RefCell<Box<dyn View<F>>>,
+    /// Cleared when it detaches or is gone, so a render already under way skips it.
+    attached: Cell<bool>,
 }
 
 trait Sink<I> {
@@ -346,6 +374,7 @@ struct Inner<F: Feature> {
     listeners: RefCell<Rc<[Listener<F::Output>]>>,
     observers: RefCell<Rc<[Observer<F>]>>,
     watchers: RefCell<Rc<[Watcher<F::State>]>>,
+    views: RefCell<Rc<[Rc<Viewing<F>>]>>,
     /// Set only by a [`TestStore`](crate::TestStore), to keep the outputs. Any other store lets each go once it is told.
     keeper: RefCell<Option<Keeper<F::Output>>>,
     /// Also set while the store is built and not yet started, so what it is sent waits for the start.
@@ -390,6 +419,7 @@ impl<F: Feature> Store<F> {
             listeners: RefCell::new(Rc::from(Vec::new())),
             observers: RefCell::new(Rc::from(Vec::new())),
             watchers: RefCell::new(Rc::from(Vec::new())),
+            views: RefCell::new(Rc::from(Vec::new())),
             keeper: RefCell::new(None),
             draining: Cell::new(true),
             intents: Intents(Rc::new(this.clone())),
@@ -444,6 +474,70 @@ impl<F: Feature> Store<F> {
         R: Into<Option<I>>,
     {
         Inner::connect(&self.0, to, map)
+    }
+
+    /// Attaches `view`, which shows the state at once and then after each batch, until the returned [`Attached`] is dropped or
+    /// the view says it [is gone](View::is_gone). The store doesn't keep its views alive: what a view holds is let go of as it
+    /// detaches.
+    ///
+    /// ```
+    /// use spiderland::{Effects, Feature, Host, Intents, Never, Store, View};
+    /// use std::{cell::Cell, rc::Rc};
+    ///
+    /// struct Counter;
+    /// impl Feature for Counter {
+    ///     type State = i32;
+    ///     type Intent = i32;
+    ///     type Effect = Never;
+    ///     type Output = Never;
+    ///     type Subscription = Never;
+    ///
+    ///     fn reduce(count: &mut i32, by: i32, _: &mut Effects<Never>) {
+    ///         *count += by;
+    ///     }
+    /// }
+    ///
+    /// /// Runs the effects, and shows nothing itself.
+    /// struct Runner;
+    /// impl Host<Counter> for Runner {
+    ///     fn perform(&mut self, effect: Never, _: &Intents<i32>) {
+    ///         match effect {}
+    ///     }
+    /// }
+    ///
+    /// struct Shown(Rc<Cell<i32>>);
+    /// impl View<Counter> for Shown {
+    ///     fn render(&mut self, count: &i32, _: &Intents<i32>) {
+    ///         self.0.set(*count);
+    ///     }
+    /// }
+    ///
+    /// let store = Store::new(0, Runner);
+    /// store.send(2);
+    /// let late = Rc::new(Cell::new(0));
+    /// let attached = store.attach(Shown(Rc::clone(&late)));
+    /// assert_eq!(late.get(), 2, "a view that attaches late shows the state at once");
+    /// store.send(3);
+    /// assert_eq!(late.get(), 5);
+    /// drop(attached);
+    /// store.send(1);
+    /// assert_eq!(late.get(), 5, "a view that has left shows nothing more");
+    /// ```
+    pub fn attach(&self, view: impl View<F>) -> Attached {
+        let (viewing, attached) = Inner::add_view(&self.0, view);
+        self.0.render_attached(&viewing);
+        attached
+    }
+
+    /// How many views are attached and not gone. A view counts until its [`Attached`] is dropped or it says it is gone, so a
+    /// window view that counts as gone once its window hides drops out of the count at once.
+    pub fn views(&self) -> usize {
+        let views = Rc::clone(&self.0.views.borrow());
+        // A view that is rendering can't be asked, and is there.
+        views
+            .iter()
+            .filter(|viewing| viewing.attached.get() && viewing.view.try_borrow().map_or(true, |view| !view.is_gone()))
+            .count()
     }
 
     /// Sends `map(&project(state))` to `to` now, and again after each batch in which the projection changed. It suits state that
@@ -644,6 +738,11 @@ impl<F: Feature> Wiring<F> {
         (self.0).0.watch(to, project, map);
     }
 
+    /// [`Store::attach`]. The view's first render is the store's first, at the start.
+    pub fn attach(&self, view: impl View<F>) -> Attached {
+        Inner::add_view(&(self.0).0, view).1
+    }
+
     /// [`Store::observe`], from the start, so it sees the effects [`Feature::start`] asked for as well.
     pub fn observe(&self, observer: impl Fn(Seen<'_, F>) + 'static) {
         self.0.observe(observer);
@@ -663,10 +762,21 @@ impl<F: Feature> Wiring<F> {
     }
 }
 
+/// Runs what it holds when dropped.
+struct OnDrop(Option<Box<dyn FnOnce()>>);
+
+impl Drop for OnDrop {
+    fn drop(&mut self) {
+        if let Some(stop) = self.0.take() {
+            stop();
+        }
+    }
+}
+
 /// Ends a connection made with [`Store::connect`] when dropped.
 #[must_use = "dropping it disconnects at once"]
 pub struct Connection {
-    stop: Option<Box<dyn FnOnce()>>,
+    _stop: OnDrop,
 }
 
 impl fmt::Debug for Connection {
@@ -675,11 +785,15 @@ impl fmt::Debug for Connection {
     }
 }
 
-impl Drop for Connection {
-    fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            stop();
-        }
+/// Detaches a view attached with [`Store::attach`] when dropped. It holds the store weakly, so it can outlive it.
+#[must_use = "dropping it detaches the view at once"]
+pub struct Attached {
+    _stop: OnDrop,
+}
+
+impl fmt::Debug for Attached {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Attached").finish_non_exhaustive()
     }
 }
 
@@ -715,13 +829,95 @@ impl<F: Feature> Inner<F> {
         let listener = this.listen(to, map, Rc::clone(&connected));
         let source = Rc::downgrade(this);
         Connection {
-            stop: Some(Box::new(move || {
+            _stop: OnDrop(Some(Box::new(move || {
                 connected.set(false);
                 if let Some(source) = source.upgrade() {
                     let mut kept = source.listeners.borrow_mut();
                     *kept = kept.iter().filter(|kept| !Weak::ptr_eq(&Rc::downgrade(kept), &listener)).cloned().collect();
                 }
-            })),
+            }))),
+        }
+    }
+
+    /// Adds `view` to those rendered after each batch, without rendering it.
+    fn add_view(this: &Rc<Self>, view: impl View<F>) -> (Rc<Viewing<F>>, Attached) {
+        let viewing = Rc::new(Viewing {
+            view: RefCell::new(Box::new(view) as Box<dyn View<F>>),
+            attached: Cell::new(true),
+        });
+        {
+            let mut views = this.views.borrow_mut();
+            *views = views.iter().cloned().chain([Rc::clone(&viewing)]).collect();
+        }
+        let (store, weak) = (Rc::downgrade(this), Rc::downgrade(&viewing));
+        let attached = Attached {
+            _stop: OnDrop(Some(Box::new(move || {
+                if let Some(viewing) = weak.upgrade() {
+                    viewing.attached.set(false);
+                }
+                if let Some(store) = store.upgrade() {
+                    store.prune_views();
+                }
+            }))),
+        };
+        (viewing, attached)
+    }
+
+    /// Renders a view that has just attached. If the store is at work, what the render sends waits for its turn. If not, the
+    /// render is a batch of its own: what it sends runs right after it.
+    fn render_attached(&self, viewing: &Viewing<F>) {
+        let idle = !self.draining.get();
+        {
+            let _draining = idle.then(|| Draining::start(&self.draining));
+            if let Ok(state) = self.state.try_borrow() {
+                self.render_view(viewing, &state);
+            }
+        }
+        if idle && !self.queue.borrow().is_empty() {
+            self.drain();
+        }
+        self.prune_views();
+    }
+
+    /// Renders one view, unless it has left, or is gone.
+    fn render_view(&self, viewing: &Viewing<F>, state: &F::State) {
+        if !viewing.attached.get() {
+            return;
+        }
+        let Ok(mut view) = viewing.view.try_borrow_mut() else {
+            return;
+        };
+        if !view.is_gone() {
+            view.render(state, &self.intents);
+        }
+        if view.is_gone() {
+            viewing.attached.set(false);
+        }
+    }
+
+    /// Renders every attached view, after the host's own render.
+    fn render_views(&self) {
+        let views = Rc::clone(&self.views.borrow());
+        if views.is_empty() {
+            return;
+        }
+        {
+            let state = self.state.borrow();
+            for viewing in views.iter() {
+                self.render_view(viewing, &state);
+            }
+        }
+        drop(views);
+        self.prune_views();
+    }
+
+    /// Lets go of views that have left or are gone.
+    fn prune_views(&self) {
+        let Ok(mut views) = self.views.try_borrow_mut() else {
+            return;
+        };
+        if views.iter().any(|viewing| !viewing.attached.get()) {
+            *views = views.iter().filter(|viewing| viewing.attached.get()).cloned().collect();
         }
     }
 
@@ -800,6 +996,7 @@ impl<F: Feature> Inner<F> {
         {
             let mut host = self.host.borrow_mut();
             host.render(&self.state.borrow(), &self.intents);
+            self.render_views();
             self.subscribe(&mut **host);
             self.perform_effects(&mut **host);
         }
@@ -850,6 +1047,7 @@ impl<F: Feature> Inner<F> {
             {
                 let mut host = self.host.borrow_mut();
                 host.render(&self.state.borrow(), &self.intents);
+                self.render_views();
                 self.subscribe(&mut **host);
                 self.perform_effects(&mut **host);
             }

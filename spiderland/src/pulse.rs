@@ -41,6 +41,51 @@ impl<T> Pulse<T> {
     }
 }
 
+/// What one view has shown of a [`Pulse`]. [`Fired::serial`] gives the view a serial of its own, which starts at 0 the first time
+/// the view shows the pulse and moves each time the pulse fires after that. So a view that attaches to a store after a pulse fired,
+/// such as a second window on a document that showed "saved", doesn't act on that fire.
+///
+/// A view keeps one for each pulse it shows, and sets the view's property from it in place of [`Pulse::serial`]:
+///
+/// ```
+/// use spiderland::{Fired, Pulse};
+///
+/// let mut saved = Pulse::new("saved");
+/// saved.fire("saved");
+///
+/// // A window that attaches now hasn't seen anything fire.
+/// let mut shown = Fired::default();
+/// assert_eq!(shown.serial(&saved), 0);
+/// saved.fire("saved");
+/// assert_eq!(shown.serial(&saved), 1);
+/// assert_eq!(shown.serial(&saved), 1, "nothing fired since");
+/// ```
+///
+/// A view built with its store, from the first state, can use either: it sees every fire.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fired {
+    /// The pulse's serial when the view last showed it.
+    last: Option<i32>,
+    /// The serial the view was given.
+    shown: i32,
+}
+
+impl Fired {
+    /// The serial for this view: 0 the first time, then one more each time the pulse has moved since the last call. Fires with no
+    /// call between them count as one, as they do for a view.
+    pub fn serial<T>(&mut self, pulse: &Pulse<T>) -> i32 {
+        match self.last {
+            None => self.last = Some(pulse.serial()),
+            Some(last) if last != pulse.serial() => {
+                self.last = Some(pulse.serial());
+                self.shown = self.shown.wrapping_add(1);
+            }
+            Some(_) => {}
+        }
+        self.shown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +98,20 @@ mod tests {
         assert_eq!((*pulse.value(), pulse.serial()), ("a", 1));
         pulse.fire("b");
         assert_eq!((*pulse.value(), pulse.serial()), ("b", 2));
+    }
+
+    #[test]
+    fn a_view_counts_from_when_it_first_shows_the_pulse_even_if_the_state_is_rebuilt() {
+        let mut pulse = Pulse::new(());
+        pulse.fire(());
+        pulse.fire(());
+        let mut fired = Fired::default();
+        assert_eq!(fired.serial(&pulse), 0);
+        pulse.fire(());
+        pulse.fire(());
+        assert_eq!(fired.serial(&pulse), 1, "two fires between renders are one");
+        let rebuilt = Pulse::new(());
+        assert_eq!(fired.serial(&rebuilt), 2, "a pulse whose serial went back still counts as a move, not a step back");
     }
 
     #[test]

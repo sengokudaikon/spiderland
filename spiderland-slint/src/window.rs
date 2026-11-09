@@ -1,5 +1,5 @@
-use slint::ComponentHandle;
-use spiderland::{Feature, Host, Intents};
+use slint::{CloseRequestResponse, ComponentHandle};
+use spiderland::{Feature, Host, Intents, View};
 use std::any::{Any, type_name};
 use std::fmt;
 
@@ -77,7 +77,61 @@ pub trait WindowHost<F: Feature>: 'static {
     }
 }
 
-/// A [`WindowHost`] and its window, held weakly, as a [`Host`] a [`Store`](spiderland::Store) can run.
+/// A [`View`] that shows a store's state in one Slint window. Attach it through [`Windowed`], which holds the window weakly:
+///
+/// ```no_run
+/// # slint::slint! { export component EditorWindow { in property <int> count; } }
+/// # use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+/// use spiderland_slint::{WindowView, Windowed};
+/// # struct Counter;
+/// # impl Feature for Counter {
+/// #     type State = i32;
+/// #     type Intent = i32;
+/// #     type Effect = Never;
+/// #     type Output = Never;
+/// #     type Subscription = Never;
+/// #     fn reduce(count: &mut i32, by: i32, _: &mut Effects<Never>) {
+/// #         *count += by;
+/// #     }
+/// # }
+/// # struct Runner;
+/// # impl Host<Counter> for Runner {
+/// #     fn perform(&mut self, effect: Never, _: &Intents<i32>) {
+/// #         match effect {}
+/// #     }
+/// # }
+///
+/// struct Editor;
+///
+/// impl WindowView<Counter> for Editor {
+///     type Window = EditorWindow;
+///
+///     fn render(&mut self, window: &EditorWindow, count: &i32, _: &Intents<i32>) {
+///         window.set_count(*count);
+///     }
+/// }
+///
+/// let store = Store::new(0, Runner);
+/// // Two windows on one store. Each is shown first, as a hidden window's view counts as gone.
+/// let (first, second) = (EditorWindow::new().unwrap(), EditorWindow::new().unwrap());
+/// first.show().unwrap();
+/// second.show().unwrap();
+/// let attached = [store.attach(Windowed::new(&first, Editor)), store.attach(Windowed::new(&second, Editor))];
+/// # drop(attached);
+/// ```
+///
+/// The view is gone, and the store lets it go, once its window is dropped or hidden. So show the window before attaching it, and
+/// a window that hides takes its view with it, even while its [`Attached`](spiderland::Attached) is kept.
+pub trait WindowView<F: Feature>: 'static {
+    /// The window the view shows the state in.
+    type Window: ComponentHandle + 'static;
+
+    /// [`View::render`], with the window. Not called once the window is gone or hidden.
+    fn render(&mut self, window: &Self::Window, state: &F::State, intents: &Intents<F::Intent>);
+}
+
+/// A [`WindowHost`] and its window, held weakly, as a [`Host`] a [`Store`](spiderland::Store) can run. Or a [`WindowView`] and
+/// its window, as a [`View`] that attaches to a store.
 pub struct Windowed<W: ComponentHandle, H> {
     window: slint::Weak<W>,
     host: H,
@@ -110,6 +164,63 @@ where
     fn subscribe(&mut self, key: &F::Subscription, intents: &Intents<F::Intent>) -> Box<dyn Any> {
         self.host.subscribe(key, intents)
     }
+}
+
+impl<F, W, V> View<F> for Windowed<W, V>
+where
+    F: Feature,
+    W: ComponentHandle + 'static,
+    V: WindowView<F, Window = W>,
+{
+    fn render(&mut self, state: &F::State, intents: &Intents<F::Intent>) {
+        if let Some(window) = self.window.upgrade().filter(|window| window.window().is_visible()) {
+            self.host.render(&window, state, intents);
+        }
+    }
+
+    fn is_gone(&self) -> bool {
+        self.window.upgrade().is_none_or(|window| !window.window().is_visible())
+    }
+}
+
+/// Lets a store decide whether `window` closes when the user asks it to. `ask` says what to do: `None` lets the window close, and
+/// `Some(intent)` keeps it shown and sends the intent, so the store can ask about unsaved work first, and close it later.
+///
+/// With several windows on one store, only the last one needs to ask:
+///
+/// ```no_run
+/// # slint::slint! { export component EditorWindow { } }
+/// # use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+/// # struct Document;
+/// # enum Intent { CloseRequested }
+/// # impl Feature for Document {
+/// #     type State = ();
+/// #     type Intent = Intent;
+/// #     type Effect = Never;
+/// #     type Output = Never;
+/// #     type Subscription = Never;
+/// #     fn reduce(_: &mut (), _: Intent, _: &mut Effects<Never>) {}
+/// # }
+/// # struct Runner;
+/// # impl Host<Document> for Runner {
+/// #     fn perform(&mut self, effect: Never, _: &Intents<Intent>) {
+/// #         match effect {}
+/// #     }
+/// # }
+/// # let store = Store::new((), Runner);
+/// # let window = EditorWindow::new().unwrap();
+/// let asking = store.clone();
+/// spiderland_slint::ask_before_closing(&window, &store.intents(), move || (asking.views() == 1).then_some(Intent::CloseRequested));
+/// ```
+pub fn ask_before_closing<W: ComponentHandle, I: 'static>(window: &W, intents: &Intents<I>, ask: impl Fn() -> Option<I> + 'static) {
+    let intents = intents.clone();
+    window.window().on_close_requested(move || match ask() {
+        Some(intent) => {
+            intents.send(intent);
+            CloseRequestResponse::KeepWindowShown
+        }
+        None => CloseRequestResponse::HideWindow,
+    });
 }
 
 impl<W: ComponentHandle, H> fmt::Debug for Windowed<W, H> {

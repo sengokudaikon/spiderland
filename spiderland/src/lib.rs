@@ -82,6 +82,10 @@
 //!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
 //!
+//! A store has one host, which runs its effects, and any number of [`View`]s, which only show its state. A view attaches with
+//! [`Store::attach`] and can leave while the store goes on, as a window on a document does. It shows the state at once, and a
+//! [`Fired`] keeps it from acting on a pulse that fired before it attached.
+//!
 //! What runs for as long as the state wants it, such as a timer while a page shows, is a
 //! [`Subscription`](Feature::Subscription). The feature says which ones its state wants, the host starts each one, and the
 //! store stops the ones no longer wanted, whether or not a view is there to render.
@@ -116,9 +120,9 @@ mod wake;
 pub use background::{Background, EventLoop, Job, Progress, Stop, Stopping};
 pub use error::Error;
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
-pub use pulse::Pulse;
+pub use pulse::{Fired, Pulse};
 pub use requests::{Asked, Latest, OneAtATime};
-pub use store::{Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, Wiring, start, step, subscriptions};
+pub use store::{Attached, Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, View, Wiring, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
 pub use test_store::TestStore;
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};

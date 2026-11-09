@@ -46,7 +46,8 @@ Put it in the crate with the window.
 - Components take properties and callbacks.
 - Only the page root reads the page's global.
 - What only the view cares about, such as hover, highlights and scroll, stays in Slint.
-- A one-shot command, such as "focus this", is a `Pulse`: the view acts when its serial changes.
+- A one-shot command, such as "focus this", is a `Pulse`: the view acts when its serial changes. A view that attaches to a store
+  later sets that property from a `Fired`, so it doesn't act on a fire from before it attached.
 
 ## 5. Tests
 
@@ -130,6 +131,18 @@ render that caused it.
 Use `rows.sync(inner.fill(…))`. A plain `Rows` in a row can lose a change: in Slint 1.18.1, while the outer row has an update not yet
 painted, an inner item changed in place stays old on screen. Two renders with no paint between them are enough. `InnerRows` gets
 the change onto the screen.
+
+**More than one window on a store**
+
+A store has one `Host`, which runs its effects, and any number of views. Write each window's view as a `WindowView`, show the
+window, and attach it with `store.attach(Windowed::new(&window, view))`. It shows the state at once. Keep the `Attached` with the
+window: dropping it detaches the view, and a hidden window's view is gone already.
+
+- A command for every window, such as "close", is a `Pulse` that each view acts on through its own `Fired`. A window opened after
+  the fire doesn't act on it.
+- To let one of several windows close on its own, and the last one ask the store first, use `ask_before_closing` with
+  `store.views() == 1`.
+- The host's `render` can be left out once the views do the showing.
 
 **What Rust can reach**
 

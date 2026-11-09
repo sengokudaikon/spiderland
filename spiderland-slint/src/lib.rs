@@ -2,6 +2,8 @@
 //!
 //! - [`WindowHost`] and [`Windowed`]: a host handed its window on each call. It isn't asked to render once the window is gone,
 //!   and still performs every effect.
+//! - [`WindowView`]: a view in one window, which attaches to a store through [`Windowed`], so several windows can show one
+//!   store. [`ask_before_closing`] lets the store decide whether a window closes.
 //! - [`Background`]: work off the UI thread whose result comes back as an intent, and waiting on the UI thread, for work that
 //!   can be let go of ([`Background::local`]) and for work that can't ([`Background::finish`]). It is
 //!   [`spiderland::Background`] on [`Slint`]'s loop.
@@ -17,7 +19,7 @@ pub mod testing;
 mod window;
 
 pub use rows::{InnerRows, Rows};
-pub use window::{WindowHost, Windowed};
+pub use window::{WindowHost, WindowView, Windowed, ask_before_closing};
 
 use slint::{Timer, TimerMode};
 use spiderland::{EventLoop, Intents, Listening, Waker};

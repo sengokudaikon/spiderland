@@ -55,6 +55,14 @@ tag makes a GitHub release from that version's section.
   stopped.
 - `spiderland`: `Latest` and `Asked`, which number requests in the state so only the answer to the latest counts, and `OneAtATime`,
   which keeps work such as saves from overlapping. Both are plain data for a reducer.
+- `spiderland`: `View`, `Store::attach` and `Attached`, so a store can have any number of views besides its host, and a view can
+  attach later and leave while the store goes on. A view shows the state at once as it attaches. `Wiring::attach` attaches one
+  before the start. `Store::views` counts the views attached and not gone. `Host::render` now does nothing unless a host says
+  otherwise, so a host whose views attach leaves it out. Existing hosts are unchanged.
+- `spiderland`: `Fired`, which gives one view a `Pulse` serial that starts at 0, so a view that attaches after a pulse fired
+  doesn't act on that fire.
+- `spiderland-slint`: `WindowView`, a view in one window, attached through `Windowed`, which is gone once its window is dropped or
+  hidden. `ask_before_closing` lets a store decide whether a window closes.
 - `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
   gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
   outcome is still heard.

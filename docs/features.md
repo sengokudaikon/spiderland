@@ -5,7 +5,9 @@
 | Item | What it does |
 |---|---|
 | `Feature` | The pure half: `reduce(state, intent, effects)`. |
-| `Host` | The impure half: `render` the state, `perform` the effects. |
+| `Host` | The impure half: `render` the state, `perform` the effects. A host whose views attach leaves `render` out. |
+| `View`, `Store::attach`, `Attached` | A view that attaches to a live store and leaves it while the store goes on. It shows the state at once, so a window opened later needs no catching up. A store has one host and any number of views. |
+| `Store::views` | Counts the views attached and not gone, such as to let one of several windows close on its own. |
 | `Store` | Runs the two on the UI thread, and queues intents sent while it works. |
 | `Intents::send_all`, `Store::send_all` | Send several intents as one batch, so the render and the effects come after all of them. |
 | `Store::ask` | Sends an intent and reads what it did, for a view callback that returns a value. |
@@ -21,6 +23,7 @@
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
 | `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |
+| `Fired` | What one view has shown of a `Pulse`: a serial that starts at 0 for that view, so a view that attaches later doesn't act on an old fire. |
 | `Tracked`, `Slice` | Redo only the parts of a render whose inputs changed. A `Version` names one state of a `Tracked`. |
 | `Slice::show`, `Input`, `Inputs` | Makes a part of a render with a plain `fn` of what it reads, and keys it on the same inputs, so none is left out by mistake. |
 | `CheckedSlice` | A `Slice` that fails when its key misses an input. It checks only under the `testing` feature, for tests. |
@@ -52,6 +55,8 @@
 |---|---|
 | `Slint` | Slint's event loop, as an `EventLoop`. |
 | `WindowHost`, `Windowed` | A host handed its window on each call. `render` isn't called once the window is gone, and `perform` always runs, with the window if it is still there. |
+| `WindowView` | A view in one window, attached through `Windowed`. It is gone once its window is dropped or hidden. |
+| `ask_before_closing` | Lets a store decide whether a window closes: the window simply closes, or stays and sends an intent, such as to ask about unsaved edits. |
 | `Background`, `on_watch`, `on_wake` | `spiderland`'s, on Slint's event loop. |
 | `every` | Sends an intent repeatedly until its timer is dropped. |
 | `after` | Sends an intent once after a delay. Keep the timer in one place and it debounces. |
