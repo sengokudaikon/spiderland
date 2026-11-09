@@ -1,12 +1,12 @@
-//! Several windows on one store, each a view attached through `Windowed`: each shows the state, one of two closes on its own, and
-//! the last one asks the store. One test: Slint's platform is set once per process.
+//! Several windows on one store, each a view attached with `attach_window`: each shows the state, a hidden window stays attached,
+//! one of two closes on its own, and the last one asks the store. One test: Slint's platform is set once per process.
 
 #![allow(missing_docs, reason = "`slint!` makes the view's types public, with no docs")]
 
 use slint::ComponentHandle;
 use spiderland::{Effects, Feature, Fired, Host, Intents, Never, Pulse, Store};
 use spiderland_slint::testing::{Headless, settle};
-use spiderland_slint::{WindowView, Windowed, ask_before_closing};
+use spiderland_slint::{WindowView, attach_window};
 
 slint::slint! {
     export component Pane inherits Window {
@@ -74,13 +74,11 @@ impl WindowView<Counter> for PaneView {
 }
 
 /// A pane, shown, with its view attached and its close asking the store when it is the last.
-fn open(store: &Store<Counter>) -> (Pane, spiderland::Attached) {
+fn open(store: &Store<Counter>) -> Pane {
     let pane = Pane::new().unwrap();
+    attach_window(store, &pane, PaneView::default(), |store| (store.views() == 1).then_some(Intent::CloseRequested));
     pane.show().unwrap();
-    let attached = store.attach(Windowed::new(&pane, PaneView::default()));
-    let asking = store.clone();
-    ask_before_closing(&pane, &store.intents(), move || (asking.views() == 1).then_some(Intent::CloseRequested));
-    (pane, attached)
+    pane
 }
 
 #[test]
@@ -90,9 +88,9 @@ fn several_windows_show_one_store_and_the_last_one_asks_before_closing() {
     let store = Store::new(State::default(), Runner);
     store.send(Intent::Save);
 
-    let (first, _first) = open(&store);
+    let first = open(&store);
     store.send(Intent::Add(2));
-    let (second, _second) = open(&store);
+    let second = open(&store);
     assert_eq!((first.get_count(), second.get_count()), (2, 2), "a window opened later shows the state at once");
     assert_eq!(store.views(), 2);
 
@@ -104,11 +102,17 @@ fn several_windows_show_one_store_and_the_last_one_asks_before_closing() {
         "each window acts on the save after it opened, and not on the one before"
     );
 
+    // A window can hide without closing, as a minimized one does. Its view stays, and it shows the state when it comes back.
+    second.hide().unwrap();
+    store.send(Intent::Add(1));
+    second.show().unwrap();
+    assert_eq!((store.views(), second.get_count()), (2, 3));
+
     headless.on(second.window()).close();
     assert!(!second.window().is_visible(), "one of two windows closes on its own");
-    assert_eq!(store.views(), 1, "a hidden window's view is gone");
+    assert_eq!(store.views(), 1, "and its view leaves the store");
     store.send(Intent::Add(1));
-    assert_eq!((first.get_count(), second.get_count()), (3, 2), "and isn't rendered again");
+    assert_eq!((first.get_count(), second.get_count()), (4, 3), "and isn't rendered again");
 
     headless.on(first.window()).close();
     assert!(first.window().is_visible(), "the last window asks the store, and stays");

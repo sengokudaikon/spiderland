@@ -1,6 +1,7 @@
 use slint::{CloseRequestResponse, ComponentHandle};
-use spiderland::{Feature, Host, Intents, View};
+use spiderland::{Feature, Host, Intents, Store, View};
 use std::any::{Any, type_name};
+use std::cell::RefCell;
 use std::fmt;
 
 /// A [`Host`] whose view lives in one Slint window. Run it in a [`Store`](spiderland::Store) through [`Windowed`], which holds the
@@ -77,12 +78,14 @@ pub trait WindowHost<F: Feature>: 'static {
     }
 }
 
-/// A [`View`] that shows a store's state in one Slint window. Attach it through [`Windowed`], which holds the window weakly:
+/// A [`View`] that shows a store's state in one Slint window, so that several windows can show one store. Attach it with
+/// [`attach_window`], which ties the view to its window and lets the store decide whether the window closes, or with
+/// [`Store::attach`](spiderland::Store::attach) through [`Windowed`], which holds the window weakly:
 ///
 /// ```no_run
 /// # slint::slint! { export component EditorWindow { in property <int> count; } }
 /// # use spiderland::{Effects, Feature, Host, Intents, Never, Store};
-/// use spiderland_slint::{WindowView, Windowed};
+/// use spiderland_slint::{WindowView, attach_window};
 /// # struct Counter;
 /// # impl Feature for Counter {
 /// #     type State = i32;
@@ -112,22 +115,28 @@ pub trait WindowHost<F: Feature>: 'static {
 /// }
 ///
 /// let store = Store::new(0, Runner);
-/// // Two windows on one store. Each is shown first, as a hidden window's view counts as gone.
-/// let (first, second) = (EditorWindow::new().unwrap(), EditorWindow::new().unwrap());
-/// first.show().unwrap();
-/// second.show().unwrap();
-/// let attached = [store.attach(Windowed::new(&first, Editor)), store.attach(Windowed::new(&second, Editor))];
-/// # drop(attached);
+/// // Two windows on one store, each closing on its own.
+/// for _ in 0..2 {
+///     let window = EditorWindow::new().unwrap();
+///     attach_window(&store, &window, Editor, |_| None);
+///     window.show().unwrap();
+/// }
 /// ```
 ///
-/// The view is gone, and the store lets it go, once its window is dropped or hidden. So show the window before attaching it, and
-/// a window that hides takes its view with it, even while its [`Attached`](spiderland::Attached) is kept.
+/// The view renders whether or not its window shows: a minimized window is still open, and shows the current state when it comes
+/// back. It is gone once its window is dropped, or once [`WindowView::is_gone`] says so.
 pub trait WindowView<F: Feature>: 'static {
     /// The window the view shows the state in.
     type Window: ComponentHandle + 'static;
 
-    /// [`View::render`], with the window. Not called once the window is gone or hidden.
+    /// [`View::render`], with the window. Not called once the window is gone.
     fn render(&mut self, window: &Self::Window, state: &F::State, intents: &Intents<F::Intent>);
+
+    /// True once the view is done with its window for good, such as after it hid it when the store closed. The store then lets
+    /// it go. A window that is dropped takes its view with it anyway, so a view whose window goes that way leaves this out.
+    fn is_gone(&self) -> bool {
+        false
+    }
 }
 
 /// A [`WindowHost`] and its window, held weakly, as a [`Host`] a [`Store`](spiderland::Store) can run. Or a [`WindowView`] and
@@ -173,24 +182,66 @@ where
     V: WindowView<F, Window = W>,
 {
     fn render(&mut self, state: &F::State, intents: &Intents<F::Intent>) {
-        if let Some(window) = self.window.upgrade().filter(|window| window.window().is_visible()) {
+        if let Some(window) = self.window.upgrade() {
             self.host.render(&window, state, intents);
         }
     }
 
     fn is_gone(&self) -> bool {
-        self.window.upgrade().is_none_or(|window| !window.window().is_visible())
+        self.host.is_gone() || self.window.upgrade().is_none()
     }
 }
 
 /// Lets a store decide whether `window` closes when the user asks it to. `ask` says what to do: `None` lets the window close, and
-/// `Some(intent)` keeps it shown and sends the intent, so the store can ask about unsaved work first, and close it later.
+/// `Some(intent)` keeps it shown and sends the intent, so the store can ask about unsaved work first, and close it later. It suits
+/// a window whose host shows it. For a view attached to a store, [`attach_window`] does this and detaches the view as it closes.
 ///
-/// With several windows on one store, only the last one needs to ask:
+/// ```no_run
+/// # slint::slint! { export component MainWindow { } }
+/// # use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+/// # struct Page;
+/// # enum Intent { CloseRequested }
+/// # impl Feature for Page {
+/// #     type State = ();
+/// #     type Intent = Intent;
+/// #     type Effect = Never;
+/// #     type Output = Never;
+/// #     type Subscription = Never;
+/// #     fn reduce(_: &mut (), _: Intent, _: &mut Effects<Never>) {}
+/// # }
+/// # struct Runner;
+/// # impl Host<Page> for Runner {
+/// #     fn perform(&mut self, effect: Never, _: &Intents<Intent>) {
+/// #         match effect {}
+/// #     }
+/// # }
+/// # let store = Store::new((), Runner);
+/// # let window = MainWindow::new().unwrap();
+/// // The page asks about unsaved work first, and closes the window itself.
+/// spiderland_slint::ask_before_closing(&window, &store.intents(), || Some(Intent::CloseRequested));
+/// ```
+pub fn ask_before_closing<W: ComponentHandle, I: 'static>(window: &W, intents: &Intents<I>, ask: impl Fn() -> Option<I> + 'static) {
+    let intents = intents.clone();
+    window.window().on_close_requested(move || match ask() {
+        Some(intent) => {
+            intents.send(intent);
+            CloseRequestResponse::KeepWindowShown
+        }
+        None => CloseRequestResponse::HideWindow,
+    });
+}
+
+/// Attaches `view`, in `window`, to `store`, for as long as the window is open. It shows the state at once. When the user asks to
+/// close the window, `ask` is handed the store and says what to do, as for [`ask_before_closing`]: `None` lets the window close,
+/// and its view leaves the store at once. `Some(intent)` keeps it shown and sends the intent. A window that is dropped takes its
+/// view with it.
+///
+/// With several windows on one store, the last one can ask first, such as about unsaved edits, while the others simply close:
 ///
 /// ```no_run
 /// # slint::slint! { export component EditorWindow { } }
 /// # use spiderland::{Effects, Feature, Host, Intents, Never, Store};
+/// # use spiderland_slint::WindowView;
 /// # struct Document;
 /// # enum Intent { CloseRequested }
 /// # impl Feature for Document {
@@ -207,19 +258,34 @@ where
 /// #         match effect {}
 /// #     }
 /// # }
+/// # struct Editor;
+/// # impl WindowView<Document> for Editor {
+/// #     type Window = EditorWindow;
+/// #     fn render(&mut self, _: &EditorWindow, _: &(), _: &Intents<Intent>) {}
+/// # }
 /// # let store = Store::new((), Runner);
-/// # let window = EditorWindow::new().unwrap();
-/// let asking = store.clone();
-/// spiderland_slint::ask_before_closing(&window, &store.intents(), move || (asking.views() == 1).then_some(Intent::CloseRequested));
+/// let window = EditorWindow::new().unwrap();
+/// spiderland_slint::attach_window(&store, &window, Editor, |store| (store.views() == 1).then_some(Intent::CloseRequested));
+/// window.show().unwrap();
 /// ```
-pub fn ask_before_closing<W: ComponentHandle, I: 'static>(window: &W, intents: &Intents<I>, ask: impl Fn() -> Option<I> + 'static) {
-    let intents = intents.clone();
-    window.window().on_close_requested(move || match ask() {
+pub fn attach_window<F, W, V>(store: &Store<F>, window: &W, view: V, ask: impl Fn(&Store<F>) -> Option<F::Intent> + 'static)
+where
+    F: Feature,
+    W: ComponentHandle + 'static,
+    V: WindowView<F, Window = W>,
+{
+    // The close handler keeps the attachment, so it lives as long as the window, and the handler can end it.
+    let attached = RefCell::new(Some(store.attach(Windowed::new(window, view))));
+    let store = store.clone();
+    window.window().on_close_requested(move || match ask(&store) {
         Some(intent) => {
-            intents.send(intent);
+            store.send(intent);
             CloseRequestResponse::KeepWindowShown
         }
-        None => CloseRequestResponse::HideWindow,
+        None => {
+            drop(attached.borrow_mut().take());
+            CloseRequestResponse::HideWindow
+        }
     });
 }
 

@@ -61,8 +61,9 @@ tag makes a GitHub release from that version's section.
   otherwise, so a host whose views attach leaves it out. Existing hosts are unchanged.
 - `spiderland`: `Fired`, which gives one view a `Pulse` serial that starts at 0, so a view that attaches after a pulse fired
   doesn't act on that fire.
-- `spiderland-slint`: `WindowView`, a view in one window, attached through `Windowed`, which is gone once its window is dropped or
-  hidden. `ask_before_closing` lets a store decide whether a window closes.
+- `spiderland-slint`: `WindowView`, a view in one window, attached through `Windowed`. It renders while its window is minimized
+  or hidden, and is gone once the window is dropped or the view says so. `attach_window` attaches one for as long as its window is
+  open, and lets the store decide whether the window closes. `ask_before_closing` does that for a window a host shows.
 - `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
   gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
   outcome is still heard.

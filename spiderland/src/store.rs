@@ -529,8 +529,8 @@ impl<F: Feature> Store<F> {
         attached
     }
 
-    /// How many views are attached and not gone. A view counts until its [`Attached`] is dropped or it says it is gone, so a
-    /// window view that counts as gone once its window hides drops out of the count at once.
+    /// How many views are attached and not gone. A view counts until its [`Attached`] is dropped or it says it is gone, such as
+    /// when a window closes, so one of several windows can tell whether it is the last.
     pub fn views(&self) -> usize {
         let views = Rc::clone(&self.0.views.borrow());
         // A view that is rendering can't be asked, and is there.

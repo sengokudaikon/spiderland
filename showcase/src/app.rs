@@ -8,8 +8,8 @@ use crate::service::{DocId, EXPORT_STEPS, Service};
 use crate::settings::{self, Settings};
 use crate::view::{DocRow, EditorWindow, LibraryWindow, RevisionRow};
 use slint::{ComponentHandle, Timer};
-use spiderland::{Attached, Fired, Host, Intents, Lifecycle, Slice, Store, Version, callbacks};
-use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, ask_before_closing, on_watch};
+use spiderland::{Fired, Host, Intents, Lifecycle, Slice, Store, Version, callbacks};
+use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, attach_window, on_watch};
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -35,8 +35,8 @@ struct Opened {
     windows: Windows,
 }
 
-/// The windows on one document, each with its view attached to the document's store.
-type Windows = Rc<RefCell<Vec<(EditorWindow, Attached)>>>;
+/// The windows on one document. Each has a view attached to the document's store for as long as it is open.
+type Windows = Rc<RefCell<Vec<EditorWindow>>>;
 
 impl fmt::Debug for App {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -126,11 +126,7 @@ impl App {
             .get(&id)
             .map(|opened| {
                 let windows = opened.windows.borrow();
-                windows
-                    .iter()
-                    .filter(|(window, _)| window.window().is_visible())
-                    .map(|(window, _)| window.clone_strong())
-                    .collect()
+                windows.iter().filter(|window| window.window().is_visible()).map(ComponentHandle::clone_strong).collect()
             })
             .unwrap_or_default()
     }
@@ -138,7 +134,7 @@ impl App {
     /// Hides every window, so the app can be dropped.
     pub fn close(&self) {
         for opened in self.0.documents.borrow().values() {
-            for (window, _) in opened.windows.borrow().iter() {
+            for window in opened.windows.borrow().iter() {
                 let _ = window.hide();
             }
         }
@@ -150,11 +146,9 @@ fn open(inner: &Inner, id: DocId) -> EditorWindow {
     let window = EditorWindow::new().expect("an editor window");
     let mut documents = inner.documents.borrow_mut();
     documents.retain(|_, opened| opened.store.try_read(|state| !state.deleted).unwrap_or(true));
-    // A view counts as gone while its window is hidden, so the window shows before its view attaches.
-    window.show().expect("show an editor");
     if let Some(opened) = documents.get(&id) {
         // The windows closed before go now. The document stays, with any save under way.
-        let hidden: Vec<_> = opened.windows.borrow_mut().extract_if(.., |(window, _)| !window.window().is_visible()).collect();
+        let hidden: Vec<_> = opened.windows.borrow_mut().extract_if(.., |window| !window.window().is_visible()).collect();
         let_go(hidden);
         show(&window, &opened.store, &opened.windows);
     } else {
@@ -175,13 +169,18 @@ fn open(inner: &Inner, id: DocId) -> EditorWindow {
         show(&window, &store, &windows);
         documents.insert(id, Opened { store, windows });
     }
+    window.show().expect("show an editor");
     window
 }
 
-/// Attaches a view in `window` to the document, which it shows at once, and sends what the user does there to the document.
+/// Attaches a view in `window` to the document, which it shows at once, and sends what the user does there to the document. One
+/// of several windows simply closes, and the document stays with the others. The last one asks the document, which may ask about
+/// unsaved edits first.
 fn show(window: &EditorWindow, store: &Store<Document>, windows: &Windows) {
-    let attached = store.attach(Windowed::new(window, EditorView::default()));
-    windows.borrow_mut().push((window.clone_strong(), attached));
+    attach_window(store, window, EditorView::default(), |store| {
+        (store.views() == 1).then_some(document::Intent::Life(Lifecycle::CloseRequested))
+    });
+    windows.borrow_mut().push(window.clone_strong());
     let intents = store.intents();
     callbacks!(window, intents, {
         on_title_edited: |title| document::Intent::EditTitle(title.into()),
@@ -196,14 +195,10 @@ fn show(window: &EditorWindow, store: &Store<Document>, windows: &Windows) {
             _ => Choice::Cancel,
         }),
     });
-    // One of several windows simply goes, and the document stays with the others. The last one asks the document, which may ask
-    // about unsaved edits first.
-    let asking = store.clone();
-    ask_before_closing(window, &intents, move || (asking.views() == 1).then_some(document::Intent::Life(Lifecycle::CloseRequested)));
 }
 
 /// Drops windows on the next turn of the event loop, as one of them may be running the callback that let them go.
-fn let_go(windows: Vec<(EditorWindow, Attached)>) {
+fn let_go(windows: Vec<EditorWindow>) {
     if !windows.is_empty() {
         Timer::single_shot(Duration::ZERO, move || drop(windows));
     }
@@ -343,6 +338,8 @@ struct EditorView {
     refused: Fired,
     toast: Fired,
     close: Fired,
+    /// Set once the document closed and this view hid its window, so the store lets the view go.
+    closed: bool,
 }
 
 impl WindowView<Document> for EditorView {
@@ -351,9 +348,14 @@ impl WindowView<Document> for EditorView {
     fn render(&mut self, window: &EditorWindow, state: &document::State, _: &Intents<document::Intent>) {
         if self.close.serial(&state.close) > 0 {
             let _ = window.hide();
+            self.closed = true;
             return;
         }
         paint(window, state, self);
+    }
+
+    fn is_gone(&self) -> bool {
+        self.closed
     }
 }
 

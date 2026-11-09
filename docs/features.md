@@ -55,8 +55,9 @@
 |---|---|
 | `Slint` | Slint's event loop, as an `EventLoop`. |
 | `WindowHost`, `Windowed` | A host handed its window on each call. `render` isn't called once the window is gone, and `perform` always runs, with the window if it is still there. |
-| `WindowView` | A view in one window, attached through `Windowed`. It is gone once its window is dropped or hidden. |
-| `ask_before_closing` | Lets a store decide whether a window closes: the window simply closes, or stays and sends an intent, such as to ask about unsaved edits. |
+| `WindowView` | A view in one window, attached through `Windowed`. It renders while its window is minimized or hidden, and is gone once the window is dropped or the view says so. |
+| `attach_window` | Attaches a `WindowView` for as long as its window is open. When the user closes the window, the store decides: it simply closes, which detaches its view, or stays and hears an intent. |
+| `ask_before_closing` | Lets a store decide whether a window its host shows closes: the window simply closes, or stays and sends an intent, such as to ask about unsaved edits. |
 | `Background`, `on_watch`, `on_wake` | `spiderland`'s, on Slint's event loop. |
 | `every` | Sends an intent repeatedly until its timer is dropped. |
 | `after` | Sends an intent once after a delay. Keep the timer in one place and it debounces. |

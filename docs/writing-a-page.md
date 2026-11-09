@@ -134,15 +134,16 @@ the change onto the screen.
 
 **More than one window on a store**
 
-A store has one `Host`, which runs its effects, and any number of views. Write each window's view as a `WindowView`, show the
-window, and attach it with `store.attach(Windowed::new(&window, view))`. It shows the state at once. Keep the `Attached` with the
-window: dropping it detaches the view, and a hidden window's view is gone already.
+A store has one `Host`, which runs its effects, and any number of views. Write each window's view as a `WindowView`, and attach
+it with `attach_window(&store, &window, view, ask)`. It shows the state at once, and stays attached for as long as the window is
+open. When the user closes the window, `ask` says whether it simply closes, which detaches its view, or stays and sends the store
+an intent. With `store.views() == 1`, one of several windows simply closes and the last one asks first.
 
+- A view renders whether or not its window shows, because a minimized window is still open.
 - A command for every window, such as "close", is a `Pulse` that each view acts on through its own `Fired`. A window opened after
-  the fire doesn't act on it.
-- To let one of several windows close on its own, and the last one ask the store first, use `ask_before_closing` with
-  `store.views() == 1`.
+  the fire doesn't act on it. A view that hides its window for good says so in `WindowView::is_gone`, so the store lets it go.
 - The host's `render` can be left out once the views do the showing.
+- For a view that isn't a window, `store.attach(view)` returns an `Attached`: dropping it detaches the view.
 
 **What Rust can reach**
 
