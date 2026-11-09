@@ -1,7 +1,8 @@
 //! The windows, in Slint's own language. Each element sits at a fixed place, so a test can click it.
 //!
 //! The library window, 400 by 300: the search box on top, a row of 20 pixels per document from y 30, and the buttons at y 240. A
-//! row is picked from x 0 to 240, shows its history from 240 to 320, and opens from 320 to 400.
+//! row is picked from x 0 to 240, shows its history from 240 to 320, and opens from 320 to 400. A history page lists a revision per
+//! 20 pixels from y 30, and a click picks one.
 //!
 //! The editor window, 400 by 300: the title box on top, the body from y 30, the buttons at y 170, and the question at y 250.
 
@@ -17,6 +18,7 @@ slint::slint! {
     export struct RevisionRow {
         revision: int,
         title: string,
+        picked: bool,
     }
 
     component Button inherits TouchArea {
@@ -158,6 +160,7 @@ slint::slint! {
         }
 
         callback back();
+        callback pick-revision(int);
         if root.history-shown: Rectangle {
             x: 0;
             y: 0;
@@ -179,10 +182,21 @@ slint::slint! {
                 y: 0;
                 text: root.history-title;
             }
-            for revision[index] in root.revisions: Text {
+            for revision[index] in root.revisions: Rectangle {
                 x: 0;
                 y: 30px + index * 20px;
-                text: "Revision " + revision.revision + ": " + revision.title;
+                width: 400px;
+                height: 20px;
+                background: revision.picked ? #dddddd : transparent;
+                Text {
+                    x: 0;
+                    text: "Revision " + revision.revision + ": " + revision.title;
+                }
+                TouchArea {
+                    clicked => {
+                        root.pick-revision(revision.revision);
+                    }
+                }
             }
         }
     }

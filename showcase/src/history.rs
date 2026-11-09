@@ -19,6 +19,8 @@ pub struct State {
     pub error: Option<String>,
     /// Whether the page is on top. A page under another doesn't show.
     pub shown: bool,
+    /// The revision picked, if any.
+    pub picked: Option<u32>,
 }
 
 impl State {
@@ -29,8 +31,29 @@ impl State {
             revisions: None,
             error: None,
             shown: false,
+            picked: None,
         }
     }
+
+    /// The history of `id` where an earlier run left it, before it loads.
+    pub fn restored(id: DocId, session: Session) -> State {
+        State {
+            picked: session.picked,
+            ..State::new(id)
+        }
+    }
+}
+
+/// What a history page keeps of itself in the session: the revision picked.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Session {
+    /// The revision picked, if any.
+    pub picked: Option<u32>,
+}
+
+/// What `state` keeps in the session.
+pub fn session(state: &State) -> Session {
+    Session { picked: state.picked }
 }
 
 /// What comes back, and what the library tells the page.
@@ -38,6 +61,8 @@ impl State {
 pub enum Intent {
     /// The saved states, or why they didn't come.
     Loaded(Result<Vec<Revision>, Error>),
+    /// Picks a revision.
+    Pick(u32),
     /// Where the page stands.
     Life(Lifecycle),
 }
@@ -70,6 +95,7 @@ impl Feature for History {
         match intent {
             Intent::Loaded(Ok(revisions)) => state.revisions = Some(revisions),
             Intent::Loaded(Err(error)) => state.error = Some(format!("The history failed to load: {error}.")),
+            Intent::Pick(revision) => state.picked = Some(revision),
             Intent::Life(Lifecycle::Shown) => state.shown = true,
             Intent::Life(Lifecycle::Hidden) => state.shown = false,
             Intent::Life(Lifecycle::CloseRequested | Lifecycle::CloseCalledOff) => {}

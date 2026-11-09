@@ -109,6 +109,16 @@ impl State {
         }
     }
 
+    /// The document `id` where an earlier run left it, before it loads. An export it had under way goes on from the step it
+    /// had done.
+    pub fn restored(id: DocId, preferences: Preferences, session: Session) -> State {
+        let mut state = State::new(id, preferences);
+        if let Some(done) = session.exporting {
+            state.export.start(export::State::resumed(done));
+        }
+        state
+    }
+
     /// Whether the editor holds edits that neither the service nor a save asked for has.
     pub fn dirty(&self) -> bool {
         self.content != self.saved && Some(&self.content) != self.saving.as_ref() && Some(&self.content) != self.saves.waiting()
@@ -181,6 +191,20 @@ pub enum Output {
     Closed(CloseAnswer),
     /// It has no window and needs the user, as when a save failed after its windows closed.
     Reopen,
+}
+
+/// What a document keeps of itself in the session: an export under way, and how far it got, so the next start goes on with it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Session {
+    /// The steps an export under way had done.
+    pub exporting: Option<u32>,
+}
+
+/// What `state` keeps in the session.
+pub fn session(state: &State) -> Session {
+    Session {
+        exporting: state.export.get().map(|export| export.done),
+    }
 }
 
 impl From<Lifecycle> for Intent {

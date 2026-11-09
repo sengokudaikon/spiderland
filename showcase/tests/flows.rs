@@ -346,18 +346,18 @@ fn an_export_reports_progress_and_stops_when_asked() {
     let doc = loaded("Alpha", "a");
     doc.send(document::Intent::Export);
     let first = doc.read(|state| state.export.instance()).expect("an export under way");
-    assert!(doc.is_running(&Running::Export(first, Steps)), "the export runs inside the document");
+    assert!(doc.is_running(&Running::Export(first, Steps { from: 0 })), "the export runs inside the document");
     doc.send(document::Intent::Exporting(first, export::Intent::Progress(2)));
     assert_eq!(doc.read(|state| state.export.get().map(|export| export.done)), Some(2));
 
     doc.send(document::Intent::StopExport);
-    assert!(!doc.is_running(&Running::Export(first, Steps)), "stopping the export stops its work");
+    assert!(!doc.is_running(&Running::Export(first, Steps { from: 0 })), "stopping the export stops its work");
     doc.send(document::Intent::Exporting(first, export::Intent::Progress(3)));
     assert!(!doc.read(|state| state.export.is_running()), "and what it sent after that is let go");
 
     doc.send(document::Intent::Export);
     let second = doc.read(|state| state.export.instance()).expect("another export under way");
-    assert!(doc.is_running(&Running::Export(second, Steps)), "it runs under a key of its own");
+    assert!(doc.is_running(&Running::Export(second, Steps { from: 0 })), "it runs under a key of its own");
     doc.send(document::Intent::Exporting(first, export::Intent::Progress(3)));
     assert_eq!(
         doc.read(|state| state.export.get().map(|export| export.done)),
@@ -366,7 +366,7 @@ fn an_export_reports_progress_and_stops_when_asked() {
     );
     doc.send(document::Intent::Exporting(second, export::Intent::Exported(Ok(true))));
     assert_eq!(doc.read(|state| (state.export.is_running(), state.toast.value().clone())), (false, "Exported".to_owned()));
-    assert!(!doc.is_running(&Running::Export(second, Steps)));
+    assert!(!doc.is_running(&Running::Export(second, Steps { from: 0 })));
 }
 
 #[test]
@@ -376,8 +376,8 @@ fn an_export_stopped_and_started_in_one_batch_gets_its_work_afresh() {
     let first = doc.read(|state| state.export.instance()).expect("an export under way");
     doc.send_all([document::Intent::StopExport, document::Intent::Export]);
     let second = doc.read(|state| state.export.instance()).expect("another export under way");
-    assert!(!doc.is_running(&Running::Export(first, Steps)), "the first export's work stopped");
-    assert!(doc.is_running(&Running::Export(second, Steps)));
+    assert!(!doc.is_running(&Running::Export(first, Steps { from: 0 })), "the first export's work stopped");
+    assert!(doc.is_running(&Running::Export(second, Steps { from: 0 })));
 }
 
 /// Scenario 6.
@@ -585,4 +585,30 @@ fn a_library_restored_from_its_session_starts_where_it_left_off() {
     assert_eq!(restored.read(library::session), session, "it saves the same again");
     assert_eq!(restored.read(library::pages), [(DocId(4), Standing::Shown)], "the history page opens again, shown");
     assert_eq!(restored.read(library::documents), [(DocId(6), Standing::Shown)], "and so does the document");
+}
+
+/// Scenario 15: a child keeps a part of its own, which the library knows nothing of.
+#[test]
+fn children_restored_from_their_parts_start_where_they_left_off() {
+    let page = TestStore::<History>::new(history::State::new(DocId(2)));
+    page.take_effects();
+    page.send(history::Intent::Pick(1));
+    let kept = page.read(history::session);
+    assert_eq!(kept, history::Session { picked: Some(1) });
+    let restored = TestStore::<History>::new(history::State::restored(DocId(2), kept));
+    assert_eq!(restored.take_effects(), [history::Effect::Load(DocId(2))], "it loads its revisions again");
+    assert_eq!(restored.read(|state| state.picked), Some(1), "with the one picked");
+
+    let doc = loaded("Alpha", "a");
+    assert_eq!(doc.read(document::session), document::Session { exporting: None });
+    doc.send(document::Intent::Export);
+    let export = doc.read(|state| state.export.instance()).expect("an export under way");
+    doc.send(document::Intent::Exporting(export, export::Intent::Progress(2)));
+    let kept = doc.read(document::session);
+    assert_eq!(kept, document::Session { exporting: Some(2) });
+    let restored = TestStore::<Document>::new(document::State::restored(DocId(1), Preferences::default(), kept));
+    let export = restored.read(|state| state.export.instance()).expect("the export goes on");
+    assert!(restored.is_running(&Running::Export(export, Steps { from: 2 })), "from the step after the last one done");
+    assert_eq!(restored.read(|state| state.export.get().map(|export| export.done)), Some(2));
+    assert_eq!(restored.take_effects(), [document::Effect::Load(DocId(1))], "and the document loads as it starts");
 }

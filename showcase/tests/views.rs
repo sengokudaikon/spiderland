@@ -29,12 +29,20 @@ impl<'a> Scene<'a> {
 
     /// The app where `session` left off, on a service just started.
     fn restore(headless: &'a Headless, session: Session) -> Scene<'a> {
+        let scene = Scene::restore_held(headless, session);
+        scene.service.gate().open();
+        scene.idle();
+        scene
+    }
+
+    /// The app where `session` left off, with each call to the service held at its gate from the start.
+    fn restore_held(headless: &'a Headless, session: Session) -> Scene<'a> {
         let service = Service::new(showcase::SAMPLE);
+        service.gate().hold();
         let pool = Pool::new(4);
         let background = pool.background();
         let app = App::restore(service.clone(), background.clone(), session);
         headless.on(app.library().window()).resize(400, 300);
-        idle(&background);
         Scene {
             headless,
             service,
@@ -434,13 +442,32 @@ fn the_next_start_is_where_the_last_left_off(headless: &Headless) {
     scene.library().click(HISTORY, row(2));
     scene.idle();
     assert_eq!(library.get_history_title(), "History of document 7");
+    // The history page and the document each keep something of their own: the revision picked, and an export under way.
+    scene.library().click(200.0, row(0));
+    assert!(library.get_revisions().row_data(0).unwrap().picked);
+    let editor = scene.app.windows(DocId(6)).remove(0);
+    headless.on(editor.window()).resize(400, 300);
+    let gate = scene.service.gate();
+    gate.hold();
+    headless.on(editor.window()).click(EXPORT, EDITOR_BUTTONS);
+    gate.wait_for("export 6 1");
+    gate.release("export 6 1");
+    until("the first step", || editor.get_export_done() == 1);
+    gate.wait_for("export 6 2");
     scene.library().close();
     scene.idle();
     assert!(!library.window().is_visible(), "nothing was unsaved, so the app closed");
     let session = scene.app.session();
+    let keys: Vec<&str> = session.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["settings", "library", "document 6", "history 7"], "each child saves under a key of its own");
     drop(scene);
 
-    let scene = Scene::restore(headless, session);
+    let scene = Scene::restore_held(headless, session);
+    let gate = scene.service.gate();
+    gate.wait_for("export 6 2");
+    assert!(!gate.waiting().contains(&"export 6 1".to_owned()), "the export goes on from the step it had done");
+    gate.open();
+    scene.idle();
     let library = scene.app.library();
     assert_eq!(library.get_query_shown(), "a", "the search box shows the search again");
     assert_eq!(library.get_status(), "Page 2 of 2");
@@ -449,6 +476,7 @@ fn the_next_start_is_where_the_last_left_off(headless: &Headless) {
     assert!(library.get_word_count(), "and the settings are as they were");
     assert!(library.get_history_shown());
     assert_eq!(library.get_history_title(), "History of document 7", "the history page is open again, on top");
+    assert!(library.get_revisions().row_data(0).unwrap().picked, "with the revision it had picked");
     let editors = scene.app.windows(DocId(6));
     assert_eq!(editors.len(), 1, "the document open has a window again");
     assert!(editors[0].get_word_count_shown());

@@ -52,7 +52,9 @@ impl App {
     }
 
     /// Builds the app as [`App::start`] does, where `session` left off: the settings, the search and its page, the document picked,
-    /// and the pages and documents open. A part that doesn't decode, such as one an older build saved, starts afresh.
+    /// and the pages and documents open. Each history page and document takes back its own part: the revision picked, and an
+    /// export under way, which goes on from the step it had done. A part that doesn't decode, such as one an older build saved,
+    /// starts afresh.
     pub fn restore(service: Service, background: Background, session: Session) -> App {
         let saved = Saved::new(session);
         let trail = Trail::default();
@@ -82,14 +84,16 @@ impl App {
         wiring.save_in(&saved, "library", |state| encode(&library::session(state)));
         settings.share(&wiring.intents(), |preferences| *preferences, |preferences| library::Intent::Preferences(*preferences));
         // Each history page is a store of its own, with a view in the library's window. Going back drops it.
+        // Each child saves its own part of the session under a key of its own, and takes it back as it is built. The library
+        // knows nothing of what they keep.
         wiring.children(&Children::default(), library::pages, {
-            let (service, background, window, trail) = (service.clone(), background.clone(), library_window.clone_strong(), trail.clone());
-            move |&id, _| HistoryPage::new(id, &service, &background, &window, &trail)
+            let (service, background, window, trail, saved) = (service.clone(), background.clone(), library_window.clone_strong(), trail.clone(), saved.clone());
+            move |&id, _| HistoryPage::new(id, &service, &background, &window, &trail, &saved)
         });
         // Each document is a store of its own, which tells the library what it says.
         wiring.children(&documents, library::documents, {
-            let (settings, trail) = (settings.clone(), trail.clone());
-            move |&id, library| Opened::new(id, &service, &background, &settings, library, &trail)
+            let (settings, trail, saved) = (settings.clone(), trail.clone(), saved.clone());
+            move |&id, library| Opened::new(id, &service, &background, &settings, library, &trail, &saved)
         });
         let library = wiring.start();
         callbacks!(library_window, library.intents(), {
@@ -205,8 +209,9 @@ struct Opened {
 }
 
 impl Opened {
-    /// Builds the store of `id`, which takes the settings, tells the library what it says, and adds what it runs to `trail`.
-    fn new(id: DocId, service: &Service, background: &Background, settings: &Store<Settings>, library: &Intents<library::Intent>, trail: &Trail) -> Opened {
+    /// Builds the store of `id`, which takes the settings, tells the library what it says, adds what it runs to `trail`, and
+    /// keeps its part of the session in `saved`.
+    fn new(id: DocId, service: &Service, background: &Background, settings: &Store<Settings>, library: &Intents<library::Intent>, trail: &Trail, saved: &Saved<Value>) -> Opened {
         let host = DocumentHost {
             service: service.clone(),
             background: background.clone(),
@@ -218,7 +223,13 @@ impl Opened {
         };
         // It starts on the preferences as they are, so the first one shared changes nothing.
         let preferences = settings.try_read(|preferences| *preferences).unwrap_or_default();
-        let wiring = Store::<Document>::build(document::State::new(id, preferences), host);
+        let key = format!("document {}", id.0);
+        let state = match saved.take(&key).and_then(decode) {
+            Some(session) => document::State::restored(id, preferences, session),
+            None => document::State::new(id, preferences),
+        };
+        let wiring = Store::<Document>::build(state, host);
+        wiring.save_in(saved, key, |state| encode(&document::session(state)));
         wiring.observe(trail.follow(format!("document {}", id.0), document::status));
         settings.share(&wiring.intents(), |preferences| *preferences, |preferences| document::Intent::Preferences(*preferences));
         wiring.forward(library, move |output| library::Intent::Document(id, *output));
@@ -352,12 +363,18 @@ struct HistoryPage {
 }
 
 impl HistoryPage {
-    fn new(id: DocId, service: &Service, background: &Background, window: &LibraryWindow, trail: &Trail) -> HistoryPage {
+    fn new(id: DocId, service: &Service, background: &Background, window: &LibraryWindow, trail: &Trail, saved: &Saved<Value>) -> HistoryPage {
         let host = HistoryHost {
             service: service.clone(),
             background: background.clone(),
         };
-        let wiring = Store::build(history::State::new(id), host);
+        let key = format!("history {}", id.0);
+        let state = match saved.take(&key).and_then(decode) {
+            Some(session) => history::State::restored(id, session),
+            None => history::State::new(id),
+        };
+        let wiring = Store::build(state, host);
+        wiring.save_in(saved, key, |state| encode(&history::session(state)));
         wiring.observe(trail.follow(format!("history {}", id.0), history::title));
         let store = wiring.start();
         let view = store.attach(Windowed::new(window, HistoryView::default()));
@@ -395,19 +412,24 @@ struct HistoryView {
 impl WindowView<History> for HistoryView {
     type Window = LibraryWindow;
 
-    fn render(&mut self, window: &LibraryWindow, state: &history::State, _: &Intents<history::Intent>) {
+    fn render(&mut self, window: &LibraryWindow, state: &history::State, intents: &Intents<history::Intent>) {
         if !state.shown {
             self.showing = false;
             return;
         }
         if !self.showing {
+            // The window's rows and their callback are the page's on top.
             window.set_revisions(self.revisions.model());
+            callbacks!(window, intents, {
+                on_pick_revision: |revision| history::Intent::Pick(revision as u32),
+            });
             self.showing = true;
         }
         window.set_history_title(history::title(state).into());
         self.revisions.sync(state.revisions.iter().flatten().map(|revision| RevisionRow {
             revision: revision.revision as i32,
             title: revision.title.as_str().into(),
+            picked: state.picked == Some(revision.revision),
         }));
     }
 }
@@ -458,12 +480,12 @@ impl Host<Export> for ExportHost {
         match effect {}
     }
 
-    fn subscribe(&mut self, _: &export::Steps, intents: &Intents<export::Intent>) -> Box<dyn Any> {
+    fn subscribe(&mut self, &export::Steps { from }: &export::Steps, intents: &Intents<export::Intent>) -> Box<dyn Any> {
         let (service, id) = (self.service.clone(), self.id);
         Box::new(self.background.stoppable(
             intents,
             move |stop, progress| {
-                for step in 1..=EXPORT_STEPS {
+                for step in from + 1..=EXPORT_STEPS {
                     if stop.is_stopped() {
                         return false;
                     }

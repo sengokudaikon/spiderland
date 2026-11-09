@@ -12,6 +12,15 @@ pub struct Export;
 pub struct State {
     /// The steps done.
     pub done: u32,
+    /// The steps done before this export started, as when it goes on with one an earlier run left under way.
+    pub from: u32,
+}
+
+impl State {
+    /// An export that goes on from `done` steps, as one an earlier run left under way does.
+    pub fn resumed(done: u32) -> State {
+        State { done, from: done }
+    }
 }
 
 /// What the work reports.
@@ -32,9 +41,12 @@ pub enum Output {
     Failed(String),
 }
 
-/// The work, on the pool, which runs while the export lasts.
+/// The work, on the pool, which runs while the export lasts, from the step after `from`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Steps;
+pub struct Steps {
+    /// The steps done before it started.
+    pub from: u32,
+}
 
 impl Feature for Export {
     type State = State;
@@ -52,7 +64,7 @@ impl Feature for Export {
         }
     }
 
-    fn subscriptions(_: &State) -> impl IntoIterator<Item = Steps> {
-        [Steps]
+    fn subscriptions(state: &State) -> impl IntoIterator<Item = Steps> {
+        [Steps { from: state.from }]
     }
 }

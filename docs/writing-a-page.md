@@ -205,7 +205,7 @@ wiring.save_in(&saved, "library", |state| encode(&library::session(state)));
 - The app says when to save, by calling `Saved::save`, and keeps the result. Save as the user asks to close, while the children
   that close then are still there to save.
 - A child saves under a key of its own, such as `document 3`, and its build takes its part by that key. A parent that rebuilds
-  its children from its own state doesn't need to know what each child saved.
+  its children from its own state doesn't need to know what each child saved. Hand the `Saved` to the child's build.
 - Save the place, not the data a service owns: the search and its page, not its results. A store restored asks for those again
   as it starts.
 - A store wired to take a shared value, such as the preferences, starts on the value restored, so the first one shared changes

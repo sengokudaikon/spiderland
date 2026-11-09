@@ -29,7 +29,7 @@
 //! | 12. A failed job and a panicking one each show in the state, and the store goes on | yes | yes |
 //! | 13. Closing the library closes the app once every document has closed, and waits for a save under way | yes | yes |
 //! | 14. A trail of what each store ran, by name, and each change to what it shows, which names the steps before a failure | yes | yes |
-//! | 15. The next start is where the last left off: the settings, the search and its page, the document picked, and the pages and documents open | yes | yes |
+//! | 15. The next start is where the last left off: the settings, the search and its page, the document picked, the pages and documents open, and what each of those kept of its own: a history page's revision picked, and a document's export under way | yes | yes |
 //!
 //! Where the app writes by hand what the framework doesn't yet do, the code says `Workaround:` and names what is missing. No such
 //! place is left.
