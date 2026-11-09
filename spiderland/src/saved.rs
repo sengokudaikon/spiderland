@@ -8,7 +8,7 @@ use std::rc::Rc;
 /// What an app saves of its stores, each under a key of its own, in a form it picks, such as text or a JSON value. The frame
 /// encodes nothing: each store says how to turn its state into a `V`, and the app turns a `V` back into a state.
 ///
-/// Each store that saves is added with [`Store::save_in`]. When the app says, such as as its window is asked to close,
+/// Each store that saves is added with [`Store::save_in`]. When the app says, such as when its window is asked to close,
 /// [`Saved::save`] reads every store still alive at that moment and returns what each says. The app keeps that where it likes. On
 /// the next start it makes a `Saved` of it, and each store [`take`](Saved::take)s its own part as it is built.
 ///

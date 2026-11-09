@@ -86,7 +86,7 @@
 //! keys in the state. A child that is dropped stops what it runs, and an answer for it goes nowhere.
 //!
 //! Each store can save its part of the session in a [`Saved`], under a key, in a form the app picks: the frame encodes nothing.
-//! The app says when to save, such as as the user asks to close, and on the next start each store takes its part back as it is
+//! The app says when to save, such as when the user asks to close, and on the next start each store takes its part back as it is
 //! built.
 //!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
