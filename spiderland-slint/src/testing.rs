@@ -51,7 +51,7 @@
 //!
 //! A standard widget is labelled by its text, and any element can say `accessible-label`. The search needs the names Slint keeps
 //! only in a build with its debug info: `with_debug_info(true)` in a `build.rs`, or `SLINT_EMIT_DEBUG_INFO=1` while `slint!`
-//! builds.
+//! builds. `slint!` isn't built again when that variable changes, so a view it built before finds nothing until its file changes.
 //!
 //! `take_snapshot` gives the frame as RGBA, for the test to save or compare. Software-rendered pixels differ a little from
 //! FemtoVG's and Skia's, so a capture that must match the app exactly needs an app shipped with `renderer-software`.
