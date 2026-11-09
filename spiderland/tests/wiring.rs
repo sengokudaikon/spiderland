@@ -204,3 +204,96 @@ fn sharing_ends_with_the_store_it_reaches() {
     settings.send(Set::Theme(1));
     assert_eq!(Rc::strong_count(&held), 1, "the next batch let go of what it held");
 }
+
+#[test]
+fn a_scoped_share_goes_out_until_it_is_dropped_and_lets_go_at_once() {
+    let settings = Store::<Settings>::new(Values { theme: 1, size: 0 }, AtOnce);
+    let (page, heard) = new_page();
+    let held = Rc::new(());
+    let holding = Rc::clone(&held);
+    let sharing = settings.share_scoped(
+        &page.intents(),
+        |values| values.theme,
+        move |theme| {
+            let _ = &holding;
+            Set::Theme(*theme)
+        },
+    );
+    assert_eq!(*heard.borrow(), [Set::Theme(1)], "a store connected later starts on the current value");
+    settings.send(Set::Theme(2));
+    drop(sharing);
+    assert_eq!(Rc::strong_count(&held), 1, "what map held went with the connection");
+    settings.send(Set::Theme(3));
+    assert_eq!(*heard.borrow(), [Set::Theme(1), Set::Theme(2)]);
+}
+
+#[test]
+fn a_scoped_share_ended_during_a_batch_sends_nothing_of_it() {
+    let settings = Store::<Settings>::new(Values::default(), AtOnce);
+    let (page, heard) = new_page();
+    let slot: Rc<RefCell<Option<Connection>>> = Rc::default();
+    let dropping = Rc::clone(&slot);
+    // Outputs are heard before what is shared goes out, so this ends the share before the batch's value.
+    settings.forward(&page.intents(), move |_| {
+        dropping.borrow_mut().take();
+        None
+    });
+    *slot.borrow_mut() = Some(settings.share_scoped(&page.intents(), |values| values.theme, |theme| Set::Theme(*theme)));
+    settings.send(Set::Theme(4));
+    assert_eq!(*heard.borrow(), [Set::Theme(0)], "only the value sent as it connected");
+}
+
+#[test]
+fn a_scoped_share_wired_first_goes_out_once_the_store_starts() {
+    let wiring = Store::<Settings>::build(Values { theme: 5, size: 0 }, AtOnce);
+    let (page, heard) = new_page();
+    let sharing = wiring.share_scoped(&page.intents(), |values| values.theme, |theme| Set::Theme(*theme));
+    assert!(heard.borrow().is_empty());
+    let settings = wiring.start();
+    assert_eq!(*heard.borrow(), [Set::Theme(5)]);
+    drop(sharing);
+    settings.send(Set::Theme(6));
+    assert_eq!(*heard.borrow(), [Set::Theme(5)]);
+}
+
+#[test]
+fn a_scoped_observer_sees_until_it_is_dropped_even_within_a_batch() {
+    let settings = Store::<Settings>::new(Values::default(), AtOnce);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = Rc::new(());
+    let (seeing, holding) = (Rc::clone(&seen), Rc::clone(&held));
+    let slot: Rc<RefCell<Option<Connection>>> = Rc::default();
+    let dropping = Rc::clone(&slot);
+    // Added first, so it sees each step before the scoped one, and ends it once it sees a size.
+    settings.observe(move |seen| {
+        if let Seen::Intent(Set::Size(_)) = seen {
+            dropping.borrow_mut().take();
+        }
+    });
+    *slot.borrow_mut() = Some(settings.observe_scoped(move |seen| {
+        let _ = &holding;
+        if let Seen::Intent(set) = seen {
+            seeing.borrow_mut().push(*set);
+        }
+    }));
+    settings.send_all([Set::Theme(1), Set::Size(2), Set::Theme(3)]);
+    assert_eq!(*seen.borrow(), [Set::Theme(1)], "it saw nothing from the moment it was dropped");
+    assert_eq!(Rc::strong_count(&held), 1, "what the observer held went with it");
+}
+
+#[test]
+fn a_scoped_observer_wired_first_sees_the_start() {
+    let wiring = Store::<Settings>::build(Values::default(), AtOnce);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let seeing = Rc::clone(&seen);
+    let observing = wiring.observe_scoped(move |seen| {
+        if let Seen::Effect(()) = seen {
+            seeing.borrow_mut().push("write");
+        }
+    });
+    let settings = wiring.start();
+    assert_eq!(*seen.borrow(), ["write"], "the write the start asked for");
+    drop(observing);
+    settings.send(Set::Theme(1));
+    assert_eq!(*seen.borrow(), ["write"]);
+}

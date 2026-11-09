@@ -17,6 +17,7 @@
 | `Store::forward` | Turns one store's outputs into another store's intents. |
 | `Store::connect`, `Connection` | Forwards until the returned `Connection` is dropped, for a connection between stores that both go on. |
 | `Store::share` | Sends a projection of the state to another store now, and again whenever it changes, so a store built later starts current. |
+| `Store::share_scoped`, `Store::observe_scoped` | `share` and `observe` until the returned `Connection` is dropped, for a panel or an inspector that comes and goes. |
 | `Store::build`, `Wiring` | Builds a store without starting it, so listeners and observers wired on it hear its start too. `Wiring::start` starts it. |
 | `Store::observe`, `Seen` | Shows each step as the store runs it: each intent, the state after it, each effect and each output. For a trail of what led to a fault, and what changed on the way. |
 | `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, ask whether they can close, and tell them when the window stays after all. |

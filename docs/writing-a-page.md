@@ -17,7 +17,8 @@ Put it in a crate without Slint.
   output reaches only those listening when it goes out. So if the store's start has to be heard, build it with `Store::build`,
   forward from the `Wiring`, then `start` it.
 - To keep another store current on part of this one's state, such as settings, `share` it. The other store gets the value at once,
-  however late it is built, and again whenever it changes.
+  however late it is built, and again whenever it changes. For a store that keeps the copy for a while, such as a panel, use
+  `share_scoped`, which ends when its `Connection` is dropped.
 
 ## 2. `present`
 

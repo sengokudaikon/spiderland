@@ -732,7 +732,8 @@ impl<F: Feature> Store<F> {
 
     /// Sends `map(&project(state))` to `to` now, and again after each batch in which the projection changed. It suits state that
     /// another store keeps a copy of, such as settings: an output is heard only by those listening when it goes out, but a store
-    /// connected later starts on the current value. It ends with whichever store goes first.
+    /// connected later starts on the current value. It ends with whichever store goes first. To end it while both stores go on,
+    /// use [`Store::share_scoped`].
     ///
     /// A store being built hears the first value as an intent once it has started, after its [`Feature::start`]. One that loads
     /// on start would load once on its own defaults first. Build its state on the current value instead, read with
@@ -745,8 +746,21 @@ impl<F: Feature> Store<F> {
         T: PartialEq + 'static,
         I: 'static,
     {
-        let watcher = self.0.watch(to, project, map);
+        let watcher = self.0.watch(to, project, map, Rc::new(Cell::new(true)));
         self.0.tell_watchers(&[watcher]);
+    }
+
+    /// Shares as [`Store::share`] does, until the returned [`Connection`] is dropped. Dropping it lets go of `project` and `map` at
+    /// once, and nothing goes through it after that, not even a value from the batch under way. It suits a store that keeps a copy
+    /// for a while, such as a panel that opens and closes.
+    pub fn share_scoped<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static) -> Connection
+    where
+        T: PartialEq + 'static,
+        I: 'static,
+    {
+        let (watcher, connection) = Inner::share_scoped(&self.0, to, project, map);
+        self.0.tell_watchers(&[watcher]);
+        connection
     }
 
     /// Keeps `children` in step with the state: after each batch, `wanted` names the children the state wants and where each
@@ -797,8 +811,9 @@ impl<F: Feature> Store<F> {
     /// and nothing can change it.
     ///
     /// It sees only what runs after it is added. To see the store's start too, add it on a [`Wiring`], which shows it the state
-    /// once [`Feature::start`] has run. It lives as long as the store, so it shouldn't hold the store. If it panics when shown an
-    /// intent, an effect or an output, that step is lost, as with a reducer that panics.
+    /// once [`Feature::start`] has run. It lives as long as the store, so it shouldn't hold the store. To stop it while the store
+    /// goes on, such as for an inspector that opens and closes, use [`Store::observe_scoped`]. If it panics when shown an intent, an
+    /// effect or an output, that step is lost, as with a reducer that panics.
     ///
     /// ```
     /// use spiderland::{Effects, Feature, Host, Intents, Never, Seen, Store};
@@ -864,9 +879,13 @@ impl<F: Feature> Store<F> {
     /// assert_eq!(*trail.borrow(), ["Add", "now 3", "Save", "Write"]);
     /// ```
     pub fn observe(&self, observer: impl Fn(Seen<'_, F>) + 'static) {
-        let mut observers = self.0.observers.borrow_mut();
-        let added: Observer<F> = Rc::new(observer);
-        *observers = observers.iter().cloned().chain([added]).collect();
+        self.0.add_observer(Rc::new(observer));
+    }
+
+    /// Observes as [`Store::observe`] does, until the returned [`Connection`] is dropped. Dropping it lets go of `observer` at once,
+    /// and it sees nothing after that, not even the rest of the batch under way.
+    pub fn observe_scoped(&self, observer: impl Fn(Seen<'_, F>) + 'static) -> Connection {
+        Inner::observe_scoped(&self.0, observer)
     }
 
     /// Saves this store's state in `saved` under `key`, as `encode` makes it, each time the app calls [`Saved::save`], for as long
@@ -985,7 +1004,16 @@ impl<F: Feature> Wiring<F> {
         T: PartialEq + 'static,
         I: 'static,
     {
-        (self.0).0.watch(to, project, map);
+        (self.0).0.watch(to, project, map, Rc::new(Cell::new(true)));
+    }
+
+    /// [`Store::share_scoped`]. The first value goes out after the first render, as [`Wiring::share`]'s does.
+    pub fn share_scoped<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static) -> Connection
+    where
+        T: PartialEq + 'static,
+        I: 'static,
+    {
+        Inner::share_scoped(&(self.0).0, to, project, map).1
     }
 
     /// [`Store::children`], from the start: the first children are built as the store starts, after its first render and
@@ -1006,6 +1034,11 @@ impl<F: Feature> Wiring<F> {
     /// [`Store::observe`], from the start, so it sees the state [`Feature::start`] left and the effects it asked for as well.
     pub fn observe(&self, observer: impl Fn(Seen<'_, F>) + 'static) {
         self.0.observe(observer);
+    }
+
+    /// [`Store::observe_scoped`], from the start.
+    pub fn observe_scoped(&self, observer: impl Fn(Seen<'_, F>) + 'static) -> Connection {
+        self.0.observe_scoped(observer)
     }
 
     /// [`Store::save_in`], wired before the start.
@@ -1040,10 +1073,26 @@ impl Drop for OnDrop {
     }
 }
 
-/// Ends a connection made with [`Store::connect`] when dropped.
+/// Ends a connection made with [`Store::connect`], [`Store::share_scoped`] or [`Store::observe_scoped`] when dropped.
 #[must_use = "dropping it disconnects at once"]
 pub struct Connection {
     _stop: OnDrop,
+}
+
+impl Connection {
+    fn ending(stop: impl FnOnce() + 'static) -> Connection {
+        Connection {
+            _stop: OnDrop(Some(Box::new(stop))),
+        }
+    }
+}
+
+/// Lets go of `gone` from `list`, if it is there.
+fn without<T: ?Sized>(list: &RefCell<Rc<[Rc<T>]>>, gone: &Weak<T>) {
+    let mut kept = list.borrow_mut();
+    if kept.iter().any(|kept| std::ptr::addr_eq(Rc::as_ptr(kept), gone.as_ptr())) {
+        *kept = kept.iter().filter(|kept| !std::ptr::addr_eq(Rc::as_ptr(kept), gone.as_ptr())).cloned().collect();
+    }
 }
 
 impl fmt::Debug for Connection {
@@ -1095,15 +1144,52 @@ impl<F: Feature> Inner<F> {
         let connected = Rc::new(Cell::new(true));
         let listener = this.listen(to, map, Rc::clone(&connected));
         let source = Rc::downgrade(this);
-        Connection {
-            _stop: OnDrop(Some(Box::new(move || {
-                connected.set(false);
-                if let Some(source) = source.upgrade() {
-                    let mut kept = source.listeners.borrow_mut();
-                    *kept = kept.iter().filter(|kept| !Weak::ptr_eq(&Rc::downgrade(kept), &listener)).cloned().collect();
-                }
-            }))),
-        }
+        Connection::ending(move || {
+            connected.set(false);
+            if let Some(source) = source.upgrade() {
+                without(&source.listeners, &listener);
+            }
+        })
+    }
+
+    fn share_scoped<T, I>(this: &Rc<Self>, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static) -> (Watcher<F::State>, Connection)
+    where
+        T: PartialEq + 'static,
+        I: 'static,
+    {
+        let connected = Rc::new(Cell::new(true));
+        let watcher = this.watch(to, project, map, Rc::clone(&connected));
+        let (source, weak) = (Rc::downgrade(this), Rc::downgrade(&watcher));
+        let connection = Connection::ending(move || {
+            connected.set(false);
+            if let Some(source) = source.upgrade() {
+                without(&source.watchers, &weak);
+            }
+        });
+        (watcher, connection)
+    }
+
+    fn add_observer(&self, observer: Observer<F>) {
+        let mut observers = self.observers.borrow_mut();
+        *observers = observers.iter().cloned().chain([observer]).collect();
+    }
+
+    fn observe_scoped(this: &Rc<Self>, observer: impl Fn(Seen<'_, F>) + 'static) -> Connection {
+        let connected = Rc::new(Cell::new(true));
+        let observing = Rc::clone(&connected);
+        let added: Observer<F> = Rc::new(move |seen| {
+            if observing.get() {
+                observer(seen);
+            }
+        });
+        let (source, weak) = (Rc::downgrade(this), Rc::downgrade(&added));
+        this.add_observer(added);
+        Connection::ending(move || {
+            connected.set(false);
+            if let Some(source) = source.upgrade() {
+                without(&source.observers, &weak);
+            }
+        })
     }
 
     /// Adds `view` to those rendered after each batch, without rendering it.
@@ -1188,8 +1274,9 @@ impl<F: Feature> Inner<F> {
         }
     }
 
-    /// Adds a watcher that sends `map(&project(state))` to `to` whenever the projection differs from the last one it sent.
-    fn watch<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static) -> Watcher<F::State>
+    /// Adds a watcher that sends `map(&project(state))` to `to` whenever the projection differs from the last one it sent, while
+    /// `connected` holds and `to` lives.
+    fn watch<T, I>(&self, to: &Intents<I>, project: impl Fn(&F::State) -> T + 'static, map: impl Fn(&T) -> I + 'static, connected: Rc<Cell<bool>>) -> Watcher<F::State>
     where
         T: PartialEq + 'static,
         I: 'static,
@@ -1197,7 +1284,7 @@ impl<F: Feature> Inner<F> {
         let to = to.clone();
         let last = RefCell::new(None::<T>);
         let added: Watcher<F::State> = Rc::new(move |state| {
-            if !to.is_alive() {
+            if !connected.get() || !to.is_alive() {
                 return Watched::Gone;
             }
             let now = project(state);
@@ -1206,8 +1293,13 @@ impl<F: Feature> Inner<F> {
             }
             let intent = map(&now);
             *last.borrow_mut() = Some(now);
-            let to = to.clone();
-            Watched::Send(Box::new(move || to.send(intent)))
+            let (to, connected) = (to.clone(), Rc::clone(&connected));
+            // A send before this one can end the connection.
+            Watched::Send(Box::new(move || {
+                if connected.get() {
+                    to.send(intent);
+                }
+            }))
         });
         let mut watchers = self.watchers.borrow_mut();
         *watchers = watchers.iter().cloned().chain([Rc::clone(&added)]).collect();
