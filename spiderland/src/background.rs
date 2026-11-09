@@ -6,10 +6,10 @@ use std::fmt;
 use std::future::poll_fn;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::Poll;
-use tokio::sync::{mpsc, oneshot, watch};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll, Waker};
+use tokio::sync::{oneshot, watch};
 
 /// The loop that runs a UI thread's events, and futures between them. It is the one thing [`Background`] and the listeners
 /// need from a toolkit, and a host crate implements it once: `spiderland-slint`'s `Slint` hands each future to
@@ -137,7 +137,8 @@ impl<L: EventLoop> Background<L> {
     /// state wants it.
     ///
     /// `work` is handed a [`Stop`] to check, and a [`Progress`] to report through. Each report goes to the store as
-    /// `progress(report)`. Reports that come faster than the UI thread takes them are merged: the store hears the latest.
+    /// `progress(report)`. Only the latest report waits for the UI thread, so reports that come faster than it takes them are
+    /// merged: the store hears the latest, and nothing piles up.
     ///
     /// Dropping the returned [`Stopping`] stops it. The work sees that the next time it checks its [`Stop`], or at once if it waits
     /// on [`Stop::stopped`], and nothing it sends arrives after that, neither a report nor its result. That is safe at any moment, even while the store handles a report from
@@ -181,11 +182,12 @@ impl<L: EventLoop> Background<L> {
     {
         let (stop, checked) = watch::channel(());
         let checked = Stop(checked);
-        let (report, mut reports) = mpsc::unbounded_channel();
+        let reports = Taking::default();
+        let report = Progress(Arc::clone(&reports.0));
         let (reply, mut replied) = oneshot::channel();
         let job = Box::new(move || {
             let mut reply = Reply(Some(reply));
-            let result = work(&checked, &Progress(report));
+            let result = work(&checked, &report);
             if let Some(reply) = reply.0.take() {
                 let _ = reply.send(Ok(result));
             }
@@ -211,11 +213,7 @@ impl<L: EventLoop> Background<L> {
                         // No reply: the pool let go of the job before it began.
                         return Poll::Ready(Heard::Done(result.unwrap_or(Err(Error::Dropped))));
                     }
-                    let mut latest = None;
-                    while let Poll::Ready(Some(report)) = reports.poll_recv(context) {
-                        latest = Some(report);
-                    }
-                    latest.map_or(Poll::Pending, |report| Poll::Ready(Heard::Report(report)))
+                    reports.poll(context).map(Heard::Report)
                 })
                 .await;
                 match heard {
@@ -337,20 +335,85 @@ impl Stop {
 }
 
 /// How work started by [`Background::stoppable`] says how far it has got.
-pub struct Progress<P>(mpsc::UnboundedSender<P>);
+pub struct Progress<P>(Arc<Mutex<Reports<P>>>);
 
 impl<P> fmt::Debug for Progress<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Progress").field("heard", &!self.0.is_closed()).finish()
+        f.debug_struct("Progress").field("heard", &!lock(&self.0).closed).finish()
     }
 }
 
 impl<P> Progress<P> {
-    /// Sends `report` to the store, as the intent the work was started with makes of it. It never blocks. Reports made faster than
-    /// the UI thread takes them are merged, so the store hears the latest. Once the work is stopped, it does nothing.
+    /// Sends `report` to the store, as the intent the work was started with makes of it. It never waits for the UI thread to take
+    /// a report. Only the latest is kept: a report the UI thread hasn't taken yet is dropped for the new one. So the store hears
+    /// the latest, and work that reports often holds one report at most. Once the work is stopped, it does nothing, and a report
+    /// made then is dropped at once.
     pub fn report(&self, report: P) {
-        let _ = self.0.send(report);
+        let (replaced, waker) = {
+            let mut reports = lock(&self.0);
+            if reports.closed {
+                return;
+            }
+            (reports.latest.replace(report), reports.waker.take())
+        };
+        // Dropped with no lock held, so a report's own drop can't wait on it.
+        drop(replaced);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
+}
+
+/// The latest report of stoppable work, for the UI thread to take.
+struct Reports<P> {
+    latest: Option<P>,
+    /// Wakes the UI thread's side once a report comes.
+    waker: Option<Waker>,
+    /// Set once the UI thread's side has let go, so a report made then is dropped at once.
+    closed: bool,
+}
+
+/// The UI thread's side of [`Progress`]. It closes the reports when dropped, so they hold nothing once nothing can hear them.
+struct Taking<P>(Arc<Mutex<Reports<P>>>);
+
+impl<P> Default for Taking<P> {
+    fn default() -> Self {
+        Taking(Arc::new(Mutex::new(Reports {
+            latest: None,
+            waker: None,
+            closed: false,
+        })))
+    }
+}
+
+impl<P> Taking<P> {
+    /// Takes the latest report, or wakes `context` once one comes.
+    fn poll(&self, context: &Context<'_>) -> Poll<P> {
+        let mut reports = lock(&self.0);
+        if let Some(report) = reports.latest.take() {
+            return Poll::Ready(report);
+        }
+        if !reports.waker.as_ref().is_some_and(|waker| waker.will_wake(context.waker())) {
+            reports.waker = Some(context.waker().clone());
+        }
+        Poll::Pending
+    }
+}
+
+impl<P> Drop for Taking<P> {
+    fn drop(&mut self) {
+        let (latest, waker) = {
+            let mut reports = lock(&self.0);
+            reports.closed = true;
+            (reports.latest.take(), reports.waker.take())
+        };
+        drop((latest, waker));
+    }
+}
+
+/// Only this file locks the reports, and nothing it runs under the lock can panic, so a poisoned lock still holds sound reports.
+fn lock<P>(reports: &Mutex<Reports<P>>) -> MutexGuard<'_, Reports<P>> {
+    reports.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Stops work started by [`Background::stoppable`] when dropped. It can be a guard for a subscription, so the work runs for as long

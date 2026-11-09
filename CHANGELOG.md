@@ -144,6 +144,9 @@ tag makes a GitHub release from that version's section.
 
 ### Fixed
 
+- `spiderland`: `Progress` keeps only the latest report until the UI thread takes it. Every report used to wait in a queue, and
+  the reports were merged only as the UI thread took them, so work that reported often while the UI thread was busy kept every
+  report it had made.
 - `spiderland`: `callbacks!` evaluates its view and store expressions once. It used to evaluate them again for each line, so
   an expression such as `ui.global::<Page>()` ran once per callback.
 - `spiderland`: `Slice::update`, `Slice::show` and `CheckedSlice::update` keep the new key only once the part has been shown. A

@@ -6,7 +6,8 @@ use std::cell::{Cell, RefCell};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -26,7 +27,12 @@ impl EventLoop for ByHand {
 
 /// Polls each future once and keeps the ones not done. Those spawned meanwhile wait for the next turn.
 fn turn() {
-    let mut context = Context::from_waker(std::task::Waker::noop());
+    turn_waking(Waker::noop());
+}
+
+/// A [`turn`] whose futures wake `waker` once they can go on.
+fn turn_waking(waker: &Waker) {
+    let mut context = Context::from_waker(waker);
     let polled: Vec<_> = SPAWNED
         .take()
         .into_iter()
@@ -465,4 +471,118 @@ fn stoppable_work_waiting_on_something_else_wakes_once_it_is_stopped() {
     assert_eq!(next(), "a stop already over completes at once");
     until("nothing left to arrive", || background.pending() == 0);
     assert!(shown.borrow().results.is_empty(), "what stopped work returns arrives nowhere");
+}
+
+/// A report that counts how many of its kind are alive.
+struct Counted {
+    n: usize,
+    alive: Arc<AtomicUsize>,
+}
+
+impl Counted {
+    fn new(n: usize, alive: &Arc<AtomicUsize>) -> Counted {
+        alive.fetch_add(1, Ordering::SeqCst);
+        Counted { n, alive: Arc::clone(alive) }
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.alive.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn reports_made_while_the_ui_thread_is_busy_keep_only_the_latest() {
+    let shown = Rc::default();
+    let store = Store::new(State::default(), Shown(Rc::clone(&shown)));
+    let background = pool();
+    let alive = Arc::new(AtomicUsize::new(0));
+    let (reported, finish) = (std::sync::mpsc::channel(), std::sync::mpsc::channel::<()>());
+    let (told, gate) = (reported.0, finish.1);
+    let last = Rc::new(Cell::new(0));
+    let stopping = background.stoppable(
+        &store.intents(),
+        {
+            let alive = Arc::clone(&alive);
+            move |_, progress| {
+                for n in 1..=10_000 {
+                    progress.report(Counted::new(n, &alive));
+                }
+                told.send(()).unwrap();
+                gate.recv().unwrap();
+                7
+            }
+        },
+        {
+            let last = Rc::clone(&last);
+            move |report: Counted| {
+                last.set(report.n);
+                Intent::Woken
+            }
+        },
+        Intent::Finished,
+    );
+    // The UI thread hasn't taken anything yet.
+    reported.1.recv_timeout(Duration::from_secs(10)).expect("the work to report");
+    assert_eq!(alive.load(Ordering::SeqCst), 1, "only the latest report is kept");
+    until("the report", || shown.borrow().wakes == 1);
+    assert_eq!(last.get(), 10_000, "the store hears the latest");
+    assert_eq!(alive.load(Ordering::SeqCst), 0);
+    finish.0.send(()).unwrap();
+    until("the result", || background.pending() == 0);
+    assert_eq!(shown.borrow().results, [Ok(7)]);
+    assert_eq!(shown.borrow().wakes, 1, "nothing more was reported");
+    assert!(stopping.is_finished());
+}
+
+#[test]
+fn a_report_wakes_the_ui_thread_and_one_made_after_a_stop_is_dropped() {
+    let shown = Rc::default();
+    let store = Store::new(State::default(), Shown(Rc::clone(&shown)));
+    let background = pool();
+    let alive = Arc::new(AtomicUsize::new(0));
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let (told, heard) = std::sync::mpsc::channel();
+    let stopping = background.stoppable(
+        &store.intents(),
+        {
+            let alive = Arc::clone(&alive);
+            move |stop, progress| {
+                gate.recv().unwrap();
+                progress.report(Counted::new(1, &alive));
+                gate.recv().unwrap();
+                assert!(stop.is_stopped());
+                progress.report(Counted::new(2, &alive));
+                told.send(format!("{progress:?}")).unwrap();
+            }
+        },
+        |_: Counted| Intent::Woken,
+        |_: Result<(), Error>| Intent::Woken,
+    );
+    struct Flag(AtomicBool);
+    impl Wake for Flag {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let woken = Arc::new(Flag(AtomicBool::new(false)));
+    turn_waking(&Waker::from(Arc::clone(&woken)));
+    assert!(!woken.0.load(Ordering::SeqCst), "nothing to hear yet");
+    go.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !woken.0.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "the report never woke the UI thread");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    turn();
+    assert_eq!(shown.borrow().wakes, 1);
+    drop(stopping);
+    turn();
+    go.send(()).unwrap();
+    let said = heard.recv_timeout(Duration::from_secs(10)).expect("the work to report after its stop");
+    assert_eq!(said, "Progress { heard: false }");
+    assert_eq!(alive.load(Ordering::SeqCst), 0, "a report made after the stop is dropped at once");
+    until("nothing left to arrive", || background.pending() == 0);
+    assert_eq!(shown.borrow().wakes, 1);
 }
