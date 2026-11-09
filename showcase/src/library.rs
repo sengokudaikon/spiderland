@@ -1,8 +1,10 @@
-//! The library: a search over the documents, a page at a time, with a selection and a history page.
+//! The library: a search over the documents, a page at a time, with a selection and a history page. It keeps the documents open
+//! and the history pages as its children, each a store of its own, and closes the app once every document has closed.
 
-use crate::service::{DocId, Found, Revision, Summary};
+use crate::document;
+use crate::service::{DocId, Found, Summary};
 use crate::settings::Preferences;
-use spiderland::{Asked, Effects, Error, Feature, Latest, Never, Tracked};
+use spiderland::{Asked, CloseAnswer, Closing, Effects, Error, Feature, Latest, Lifecycle, Never, Standing, Tracked};
 
 /// The feature.
 #[derive(Debug)]
@@ -13,7 +15,7 @@ pub struct Library;
 pub enum Page {
     /// The search and its results.
     List,
-    /// One document's saved states.
+    /// One document's saved states, a [`History`](crate::history::History) of its own.
     History(DocId),
 }
 
@@ -38,8 +40,10 @@ pub struct State {
     pub error: Option<String>,
     /// The pages, the one shown last.
     pub pages: Vec<Page>,
-    /// What the history page shows, once it has come.
-    pub history: Option<(DocId, Vec<Revision>)>,
+    /// The documents open, each a store the library keeps until it says it has closed.
+    pub open: Vec<DocId>,
+    /// The library's own close, while it waits for each document open to close.
+    pub closing: Option<Closing<DocId>>,
 }
 
 impl State {
@@ -55,7 +59,8 @@ impl State {
             search: Latest::default(),
             error: None,
             pages: vec![Page::List],
-            history: None,
+            open: Vec::new(),
+            closing: None,
         }
     }
 
@@ -90,23 +95,18 @@ pub enum Intent {
     },
     /// Picks a document.
     Select(DocId),
-    /// Opens a document in a window of its own.
+    /// Opens a window on a document, the document too if it isn't open.
     Open(DocId),
     /// Shows a document's history.
     ShowHistory(DocId),
     /// Goes back a page.
     Back,
-    /// A history's answer.
-    HistoryLoaded {
-        /// Whose history.
-        id: DocId,
-        /// Its saved states, newest first.
-        result: Result<Vec<Revision>, Error>,
-    },
     /// The preferences changed.
     Preferences(Preferences),
-    /// A document was saved or deleted, so the results may be stale.
-    Changed,
+    /// What an open document said.
+    Document(DocId, document::Output),
+    /// What the library's window says: the user asked to close it, which closes the app.
+    Life(Lifecycle),
 }
 
 /// Work for the host.
@@ -123,10 +123,10 @@ pub enum Effect {
         /// How many to a page.
         size: usize,
     },
-    /// A document's history.
-    LoadHistory(DocId),
-    /// A window for a document.
-    Open(DocId),
+    /// Opens a window on an open document.
+    OpenWindow(DocId),
+    /// Closes the library's window, once every document has closed.
+    Close,
 }
 
 impl Feature for Library {
@@ -161,7 +161,7 @@ impl Feature for Library {
                     search(state, effects);
                 }
             }
-            Intent::Refresh | Intent::Changed => search(state, effects),
+            Intent::Refresh | Intent::Document(_, document::Output::Changed) => search(state, effects),
             // An answer to a search typed over comes back late, and is dropped.
             Intent::Found { asked, result } if state.search.answer(asked) => match result {
                 Ok(found) => {
@@ -173,26 +173,18 @@ impl Feature for Library {
             },
             Intent::Found { .. } => {}
             Intent::Select(id) => state.selected = Some(id),
-            Intent::Open(id) => effects.push(Effect::Open(id)),
-            // Workaround: no navigation stack whose pages are children. The history page has no lifecycle of its own, so the
-            // library loads it, and drops an answer for a page no longer shown, by hand.
-            Intent::ShowHistory(id) => {
-                state.pages.push(Page::History(id));
-                state.history = None;
-                effects.push(Effect::LoadHistory(id));
+            // Nothing opens while the app closes.
+            Intent::Open(id) if state.closing.is_none() => {
+                if !state.open.contains(&id) {
+                    state.open.push(id);
+                }
+                effects.push(Effect::OpenWindow(id));
             }
+            Intent::Open(_) => {}
+            Intent::ShowHistory(id) => state.pages.push(Page::History(id)),
             Intent::Back => {
                 if state.pages.len() > 1 {
                     state.pages.pop();
-                    state.history = None;
-                }
-            }
-            Intent::HistoryLoaded { id, result } => {
-                if state.shown() == Page::History(id) {
-                    match result {
-                        Ok(revisions) => state.history = Some((id, revisions)),
-                        Err(error) => state.error = Some(format!("The history failed to load: {error}.")),
-                    }
                 }
             }
             Intent::Preferences(preferences) => {
@@ -203,7 +195,38 @@ impl Feature for Library {
                     search(state, effects);
                 }
             }
+            Intent::Document(id, document::Output::Closed(answer)) => {
+                // A document that has closed has nothing left to finish, so the library lets it go.
+                if answer == CloseAnswer::Closed {
+                    state.open.retain(|open| *open != id);
+                }
+                let heard = state.closing.as_mut().and_then(|closing| closing.hear(id, answer));
+                if let Some(answer) = heard {
+                    closed(state, answer, effects);
+                }
+            }
+            // A document with no window that needs the user, such as after a save failed, asks for one.
+            Intent::Document(id, document::Output::Reopen) => effects.push(Effect::OpenWindow(id)),
+            Intent::Life(Lifecycle::CloseRequested) => {
+                if state.closing.is_none() {
+                    let closing = Closing::asking(state.open.iter().copied());
+                    // With no document open, there is no one to wait for.
+                    match closing.answer() {
+                        Some(answer) => closed(state, answer, effects),
+                        None => state.closing = Some(closing),
+                    }
+                }
+            }
+            Intent::Life(Lifecycle::Shown | Lifecycle::Hidden | Lifecycle::CloseCalledOff) => {}
         }
+    }
+}
+
+/// The library's close is decided: every document has closed, or one stays, and so does the app.
+fn closed(state: &mut State, answer: CloseAnswer, effects: &mut Effects<Effect>) {
+    state.closing = None;
+    if answer == CloseAnswer::Closed {
+        effects.push(Effect::Close);
     }
 }
 
@@ -214,6 +237,22 @@ fn search(state: &mut State, effects: &mut Effects<Effect>) {
         page: state.page,
         size: state.preferences.page_size,
     });
+}
+
+/// The history pages open, the one on top shown, each a store the library keeps.
+pub fn pages(state: &State) -> Vec<(DocId, Standing)> {
+    let top = state.pages.len() - 1;
+    let histories = state.pages.iter().enumerate().filter_map(|(at, page)| match page {
+        Page::List => None,
+        Page::History(id) => Some((*id, if at == top { Standing::Shown } else { Standing::Hidden })),
+    });
+    histories.collect()
+}
+
+/// The documents open, each a store the library keeps. While the library closes, each is asked to close.
+pub fn documents(state: &State) -> Vec<(DocId, Standing)> {
+    let standing = if state.closing.is_some() { Standing::Closing } else { Standing::Shown };
+    state.open.iter().map(|id| (*id, standing)).collect()
 }
 
 /// One row of the list, as the view shows it.
@@ -241,6 +280,9 @@ pub fn rows(found: &Tracked<Vec<Summary>>, selected: Option<DocId>) -> Vec<Row> 
 
 /// What the status line says.
 pub fn status(state: &State) -> String {
+    if state.closing.is_some() {
+        return "Closing once every document has".to_owned();
+    }
     if let Some(error) = &state.error {
         return error.clone();
     }

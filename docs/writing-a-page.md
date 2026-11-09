@@ -148,6 +148,35 @@ page's store. The parent keeps the child's state, often in an `Option`, and maps
 
 An intent for a child that is gone finds `None`, and the parent lets it go.
 
+**Children a parent keeps**
+
+A page under another, a dialog, or a document with windows of its own is a store of its own, which a parent keeps. The parent's
+state names its children by key, and says where each stands. Wire them on the parent's `Wiring`:
+
+```rust
+let documents = Children::default();
+wiring.children(&documents, library::documents, move |&id, library| {
+    let document = Store::<Document>::build(document::State::new(id), DocumentHost::new(id));
+    document.forward(library, move |output| library::Intent::Document(id, *output));
+    document.start()
+});
+```
+
+- A stack is a `Vec` of keys in the state, the last one `Standing::Shown` and the rest `Hidden`. A slot is an `Option`. A set is a
+  list whose children are all shown.
+- After each batch, a new key's child is built, and a key that went takes its child with it. What the child was loading stops
+  counting, with nothing to check, because its `Intents` no longer reach a store.
+- Each child hears its standing as a `Lifecycle` event when it is built and whenever it changes. Give the child's intent a
+  `From<Lifecycle>`, and `Store` is a `Child`. For a child that is more than a store, such as a page and its view, write
+  `Child::tell`.
+- To close, the parent sets each child to `Standing::Closing` and keeps a `Closing` in its state. Each child answers with an output
+  once it has nothing left to finish, such as a save, and the parent drops it then. So the app's last window can wait for every
+  document's saves before it closes, and the event loop runs until it does.
+- Children are built before the batch's effects run, so an effect can reach a child its batch named, through `Children::get`.
+- `build` is handed the parent's `Intents` to forward to. It lives as long as the parent, so it mustn't hold the parent's store.
+- A window doesn't keep its store alive. The parent keeps it, so a window held a moment longer, such as until the next turn of the
+  event loop, doesn't keep its work going.
+
 **More than one window on a store**
 
 A store has one `Host`, which runs its effects, and any number of views. Write each window's view as a `WindowView`, and attach

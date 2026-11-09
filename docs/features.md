@@ -20,6 +20,9 @@
 | `Store::build`, `Wiring` | Builds a store without starting it, so listeners and observers wired on it hear its start too. `Wiring::start` starts it. |
 | `Store::observe`, `Seen` | Shows each intent and effect as the store runs it, for a trail of what led to a fault. |
 | `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, ask whether they can close, and tell them when the window stays after all. |
+| `Children`, `Store::children`, `Wiring::children` | Child stores a parent keeps, one for each key its state names: a stack of pages, a slot, or a set of documents. Each is built as its key appears and dropped once it goes, so an answer for a page closed goes nowhere. |
+| `Standing`, `Child` | Where the parent's state puts each child: shown, hidden or asked to close. Each change reaches the child as a `Lifecycle` event, through `Child::tell`, which a store whose intent is `From<Lifecycle>` has. |
+| `Store::downgrade`, `WeakStore` | Holds a store without keeping it alive, such as from a window's handler. |
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
 | `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |
@@ -57,7 +60,7 @@
 | `Slint` | Slint's event loop, as an `EventLoop`. |
 | `WindowHost`, `Windowed` | A host handed its window on each call. `render` isn't called once the window is gone, and `perform` always runs, with the window if it is still there. |
 | `WindowView` | A view in one window, attached through `Windowed`. It renders while its window is minimized or hidden, and is gone once the window is dropped or the view says so. |
-| `attach_window` | Attaches a `WindowView` for as long as its window is open. When the user closes the window, the store decides: it simply closes, which detaches its view, or stays and hears an intent. |
+| `attach_window` | Attaches a `WindowView` for as long as its window is open. When the user closes the window, the store decides: it simply closes, which detaches its view, or stays and hears an intent. The window doesn't keep the store alive. |
 | `ask_before_closing` | Lets a store decide whether a window its host shows closes: the window simply closes, or stays and sends an intent, such as to ask about unsaved edits. |
 | `Background`, `on_watch`, `on_wake` | `spiderland`'s, on Slint's event loop. |
 | `every` | Sends an intent repeatedly until its timer is dropped. |

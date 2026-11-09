@@ -236,6 +236,9 @@ pub fn ask_before_closing<W: ComponentHandle, I: 'static>(window: &W, intents: &
 /// and its view leaves the store at once. `Some(intent)` keeps it shown and sends the intent. A window that is dropped takes its
 /// view with it.
 ///
+/// The window doesn't keep the store alive, so whoever built the store keeps it, such as a parent's
+/// [`Children`](spiderland::Children). Once the store is gone, the window simply closes.
+///
 /// With several windows on one store, the last one can ask first, such as about unsaved edits, while the others simply close:
 ///
 /// ```no_run
@@ -276,17 +279,19 @@ where
 {
     // The close handler keeps the attachment, so it lives as long as the window, and the handler can end it.
     let attached = RefCell::new(Some(store.attach(Windowed::new(window, view))));
-    let store = store.clone();
-    window.window().on_close_requested(move || match ask(&store) {
-        Some(intent) => {
-            store.send(intent);
-            CloseRequestResponse::KeepWindowShown
-        }
-        None => {
-            drop(attached.borrow_mut().take());
-            CloseRequestResponse::HideWindow
-        }
-    });
+    let store = store.downgrade();
+    window
+        .window()
+        .on_close_requested(move || match store.upgrade().and_then(|store| Some((ask(&store)?, store))) {
+            Some((intent, store)) => {
+                store.send(intent);
+                CloseRequestResponse::KeepWindowShown
+            }
+            None => {
+                drop(attached.borrow_mut().take());
+                CloseRequestResponse::HideWindow
+            }
+        });
 }
 
 impl<W: ComponentHandle, H> fmt::Debug for Windowed<W, H> {

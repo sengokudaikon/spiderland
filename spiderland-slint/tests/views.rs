@@ -1,5 +1,6 @@
 //! Several windows on one store, each a view attached with `attach_window`: each shows the state, a hidden window stays attached,
-//! one of two closes on its own, and the last one asks the store. One test: Slint's platform is set once per process.
+//! one of two closes on its own, and the last one asks the store. A window doesn't keep its store. One test: Slint's platform is
+//! set once per process.
 
 #![allow(missing_docs, reason = "`slint!` makes the view's types public, with no docs")]
 
@@ -118,5 +119,12 @@ fn several_windows_show_one_store_and_the_last_one_asks_before_closing() {
     assert!(first.window().is_visible(), "the last window asks the store, and stays");
     assert!(store.try_read(|state| state.asked_to_close).unwrap());
     first.hide().unwrap();
+    settle();
+
+    // A window doesn't keep its store alive. Once the store is gone, the window simply closes.
+    let last = open(&store);
+    drop(store);
+    headless.on(last.window()).close();
+    assert!(!last.window().is_visible());
     settle();
 }

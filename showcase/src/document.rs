@@ -1,7 +1,7 @@
 //! One open document: editing, saving, exporting and deleting it, and closing its windows.
 //!
-//! Its store lives as long as the app keeps it, not as long as a window shows it, so a save started before its last window closes
-//! still finishes, and its outcome is recorded here.
+//! Its store is one of the library's children, and lives until it says it has closed, not as long as a window shows it. So a save
+//! started before its last window closes still finishes, and its outcome is recorded here.
 
 use crate::export::{self, Export};
 use crate::service::DocId;
@@ -73,8 +73,11 @@ pub struct State {
     pub export: Option<export::State>,
     /// The question shown.
     pub asking: Option<Ask>,
-    /// Whether a close waits for a save to finish.
+    /// Whether a close waits for a save to finish before the windows close.
     pub closing: bool,
+    /// Whether its windows have closed. It tells the library it has closed once no save is under way, and a window opened
+    /// before then keeps it.
+    pub leaving: bool,
     /// A copy of the preferences, which another store owns.
     pub preferences: Preferences,
     /// Whether the document is gone.
@@ -99,6 +102,7 @@ impl State {
             export: None,
             asking: None,
             closing: false,
+            leaving: false,
             preferences,
             deleted: false,
         }
@@ -145,8 +149,10 @@ pub enum Intent {
     Answer(Choice),
     /// A delete's outcome.
     Deleted(Result<Result<(), String>, Error>),
-    /// What the app tells the document about its windows.
+    /// What the library tells the document, and its last window's close.
     Life(Lifecycle),
+    /// A window opened on the document.
+    WindowOpened,
     /// Another program changed a document.
     ChangedOutside(Option<DocId>),
     /// The preferences changed.
@@ -169,8 +175,17 @@ pub enum Effect {
 pub enum Output {
     /// It was saved or deleted, so lists of documents may be stale.
     Changed,
-    /// Its answer to [`Lifecycle::CloseRequested`].
+    /// Its answer to [`Lifecycle::CloseRequested`]. `Closed` comes once its windows have closed and no save is under way, so
+    /// nothing is left to finish.
     Closed(CloseAnswer),
+    /// It has no window and needs the user, as when a save failed after its windows closed.
+    Reopen,
+}
+
+impl From<Lifecycle> for Intent {
+    fn from(life: Lifecycle) -> Self {
+        Intent::Life(life)
+    }
 }
 
 /// What runs while the state wants it.
@@ -237,8 +252,8 @@ impl Feature for Document {
             Intent::Answer(choice) => answer(state, choice, effects),
             Intent::Deleted(Ok(Ok(()))) => {
                 state.deleted = true;
-                state.close.fire(());
                 effects.emit(Output::Changed);
+                close(state, effects);
             }
             Intent::Deleted(Ok(Err(why))) => state.error = Some(why),
             Intent::Deleted(Err(error)) => state.error = Some(format!("The delete failed: {error}.")),
@@ -251,6 +266,7 @@ impl Feature for Document {
                 }
             }
             Intent::Life(Lifecycle::Shown | Lifecycle::Hidden | Lifecycle::CloseCalledOff) => {}
+            Intent::WindowOpened => state.leaving = false,
             Intent::ChangedOutside(changed) => {
                 if changed == Some(state.id) && !state.dirty() && !state.saves.is_running() {
                     effects.push(Effect::Load(state.id));
@@ -298,6 +314,8 @@ fn saved(state: &mut State, result: Result<Result<u32, String>, Error>, effects:
             if state.closing && !state.saves.is_running() {
                 state.closing = false;
                 close(state, effects);
+            } else {
+                settle(state, effects);
             }
         }
         Ok(Err(why)) => failed(state, why, next, effects),
@@ -305,7 +323,8 @@ fn saved(state: &mut State, result: Result<Result<u32, String>, Error>, effects:
     }
 }
 
-/// A save that failed keeps the edits, and keeps the window open if it was closing. A save that waited still goes.
+/// A save that failed keeps the edits, and keeps the window open if it was closing. If the windows have closed already, it stays,
+/// and asks for a window to show what went wrong. A save that waited still goes.
 fn failed(state: &mut State, why: String, next: Option<Content>, effects: &mut Effects<Effect, Output>) {
     state.error = Some(why);
     if let Some(content) = next {
@@ -313,6 +332,9 @@ fn failed(state: &mut State, why: String, next: Option<Content>, effects: &mut E
     }
     if std::mem::take(&mut state.closing) {
         effects.emit(Output::Closed(CloseAnswer::StayingOpen));
+    } else if std::mem::take(&mut state.leaving) {
+        effects.emit(Output::Closed(CloseAnswer::StayingOpen));
+        effects.emit(Output::Reopen);
     }
 }
 
@@ -339,9 +361,19 @@ fn answer(state: &mut State, choice: Choice, effects: &mut Effects<Effect, Outpu
     }
 }
 
+/// Closes the windows, and stops an export under way. The document says it has closed once no save is under way.
 fn close(state: &mut State, effects: &mut Effects<Effect, Output>) {
     state.close.fire(());
-    effects.emit(Output::Closed(CloseAnswer::Closed));
+    state.export = None;
+    state.leaving = true;
+    settle(state, effects);
+}
+
+/// Tells the library the document has closed, once its windows have and its saves are done.
+fn settle(state: &mut State, effects: &mut Effects<Effect, Output>) {
+    if state.leaving && !state.saves.is_running() {
+        effects.emit(Output::Closed(CloseAnswer::Closed));
+    }
 }
 
 /// What the status line says.

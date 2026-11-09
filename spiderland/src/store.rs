@@ -1,6 +1,6 @@
 //! The reducer's contract and the store that runs it.
 
-use crate::Subscriptions;
+use crate::{Child, Children, Standing, Subscriptions};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -486,6 +486,9 @@ type Keeper<O> = Box<dyn FnMut(O)>;
 /// Looks at the state after a batch and says what to send, if anything.
 type Watcher<S> = Rc<dyn Fn(&S) -> Watched>;
 
+/// Looks at the state after a batch and says which children it wants, then keeps them once no borrow of the state is held.
+type Family<S> = Rc<dyn Fn(&S) -> Box<dyn FnOnce()>>;
+
 /// What a [`Watcher`] makes of the state.
 enum Watched {
     /// What it shares hasn't changed.
@@ -510,6 +513,7 @@ struct Inner<F: Feature> {
     listeners: RefCell<Rc<[Listener<F::Output>]>>,
     observers: RefCell<Rc<[Observer<F>]>>,
     watchers: RefCell<Rc<[Watcher<F::State>]>>,
+    families: RefCell<Rc<[Family<F::State>]>>,
     views: RefCell<Rc<[Rc<Viewing<F>>]>>,
     /// Set only by a [`TestStore`](crate::TestStore), to keep the outputs. Any other store lets each go once it is told.
     keeper: RefCell<Option<Keeper<F::Output>>>,
@@ -535,6 +539,32 @@ impl<F: Feature> fmt::Debug for Store<F> {
     }
 }
 
+/// A store held without keeping it alive, from [`Store::downgrade`]. It suits a window's handler that needs the store while the
+/// store lasts, where a [`Store`] would keep it going for as long as the window does.
+pub struct WeakStore<F: Feature>(Weak<Inner<F>>);
+
+impl<F: Feature> Clone for WeakStore<F> {
+    fn clone(&self) -> Self {
+        WeakStore(self.0.clone())
+    }
+}
+
+impl<F: Feature> fmt::Debug for WeakStore<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WeakStore")
+            .field("feature", &format_args!("{}", std::any::type_name::<F>()))
+            .field("alive", &(self.0.strong_count() > 0))
+            .finish()
+    }
+}
+
+impl<F: Feature> WeakStore<F> {
+    /// The store, while something else keeps it alive.
+    pub fn upgrade(&self) -> Option<Store<F>> {
+        self.0.upgrade().map(Store)
+    }
+}
+
 impl<F: Feature> Store<F> {
     /// Builds the store and starts it, as [`Store::build`] and [`Wiring::start`] do. What the store does as it starts reaches
     /// no listener and no observer, since none can be there yet. Wire a store that has to be heard from the start on a [`Wiring`].
@@ -555,6 +585,7 @@ impl<F: Feature> Store<F> {
             listeners: RefCell::new(Rc::from(Vec::new())),
             observers: RefCell::new(Rc::from(Vec::new())),
             watchers: RefCell::new(Rc::from(Vec::new())),
+            families: RefCell::new(Rc::from(Vec::new())),
             views: RefCell::new(Rc::from(Vec::new())),
             keeper: RefCell::new(None),
             draining: Cell::new(true),
@@ -585,6 +616,11 @@ impl<F: Feature> Store<F> {
     /// A sender of this store's intents, for a view's callbacks, a timer or a worker. It doesn't keep the store alive.
     pub fn intents(&self) -> Intents<F::Intent> {
         self.0.intents.clone()
+    }
+
+    /// This store, held without keeping it alive.
+    pub fn downgrade(&self) -> WeakStore<F> {
+        WeakStore(Rc::downgrade(&self.0))
     }
 
     /// Sends `map(output)` to `to` for each output this store emits, in the order they were forwarded. `map` returns an intent,
@@ -689,6 +725,34 @@ impl<F: Feature> Store<F> {
     {
         let watcher = self.0.watch(to, project, map);
         self.0.tell_watchers(&[watcher]);
+    }
+
+    /// Keeps `children` in step with the state: after each batch, `wanted` names the children the state wants and where each
+    /// stands. A new key's child is made with `build`, which is handed this store's intents so it can forward the child's
+    /// outputs here. A child no longer named is dropped, and each one is told its [`Standing`] as it is built and whenever it
+    /// changes. [`Children`] shows a stack of pages.
+    ///
+    /// It runs after the batch's render and subscriptions and before its effects, so an effect can reach a child its batch
+    /// named. On a started store it keeps the children at once, as they stand now. Wire a store's first children on a
+    /// [`Wiring`].
+    ///
+    /// `build` lives as long as this store, so it shouldn't hold this store: forward to the intents it is handed.
+    pub fn children<K, T>(&self, children: &Children<K, T>, wanted: impl Fn(&F::State) -> Vec<(K, Standing)> + 'static, build: impl FnMut(&K, &Intents<F::Intent>) -> T + 'static)
+    where
+        K: PartialEq + 'static,
+        T: Child,
+    {
+        let family = self.0.keep(children, wanted, build);
+        // As for a view that attaches: what a child sends here as it is built waits until they are all kept.
+        let idle = !self.0.draining.get();
+        {
+            let _draining = idle.then(|| Draining::start(&self.0.draining));
+            let keep = family(&self.0.state.borrow());
+            keep();
+        }
+        if idle && !self.0.queue.borrow().is_empty() {
+            self.0.drain();
+        }
     }
 
     /// Calls `observer` with each intent just before it is reduced and each effect just before it is performed, in the order the
@@ -872,6 +936,16 @@ impl<F: Feature> Wiring<F> {
         I: 'static,
     {
         (self.0).0.watch(to, project, map);
+    }
+
+    /// [`Store::children`], from the start: the first children are built as the store starts, after its first render and
+    /// before the effects [`Feature::start`] asked for.
+    pub fn children<K, T>(&self, children: &Children<K, T>, wanted: impl Fn(&F::State) -> Vec<(K, Standing)> + 'static, build: impl FnMut(&K, &Intents<F::Intent>) -> T + 'static)
+    where
+        K: PartialEq + 'static,
+        T: Child,
+    {
+        (self.0).0.keep(children, wanted, build);
     }
 
     /// [`Store::attach`]. The view's first render is the store's first, at the start.
@@ -1107,6 +1181,45 @@ impl<F: Feature> Inner<F> {
         }
     }
 
+    /// Adds a family that keeps `children` in step with what `wanted` finds in the state.
+    fn keep<K, T>(
+        &self,
+        children: &Children<K, T>,
+        wanted: impl Fn(&F::State) -> Vec<(K, Standing)> + 'static,
+        build: impl FnMut(&K, &Intents<F::Intent>) -> T + 'static,
+    ) -> Family<F::State>
+    where
+        K: PartialEq + 'static,
+        T: Child,
+    {
+        let (children, intents) = (children.clone(), self.intents.clone());
+        let build = Rc::new(RefCell::new(build));
+        let added: Family<F::State> = Rc::new(move |state| {
+            let wanted = wanted(state);
+            let (children, intents, build) = (children.clone(), intents.clone(), Rc::clone(&build));
+            Box::new(move || children.sync(wanted, &mut |key| (build.borrow_mut())(key, &intents)))
+        });
+        let mut families = self.families.borrow_mut();
+        *families = families.iter().cloned().chain([Rc::clone(&added)]).collect();
+        added
+    }
+
+    /// Keeps every family's children in step with the state. No borrow of the state or the host is held while a child is
+    /// built, told or dropped, and what a child sends here waits for the next batch.
+    fn keep_children(&self) {
+        let families = Rc::clone(&self.families.borrow());
+        if families.is_empty() {
+            return;
+        }
+        let keeps: Vec<Box<dyn FnOnce()>> = {
+            let state = self.state.borrow();
+            families.iter().map(|family| family(&state)).collect()
+        };
+        for keep in keeps {
+            keep();
+        }
+    }
+
     fn tell_all_watchers(&self) {
         let watchers = Rc::clone(&self.watchers.borrow());
         self.tell_watchers(&watchers);
@@ -1129,14 +1242,20 @@ impl<F: Feature> Inner<F> {
 
     fn render_first(&self) {
         let _draining = Draining::start(&self.draining);
+        self.render_and_perform();
+        self.tell_all_watchers();
+    }
+
+    /// One batch's work after its intents are reduced: the render, the views, the subscriptions, the children, then the effects.
+    fn render_and_perform(&self) {
         {
             let mut host = self.host.borrow_mut();
             host.render(&self.state.borrow(), &self.intents);
             self.render_views();
             self.subscribe(&mut **host);
-            self.perform_effects(&mut **host);
         }
-        self.tell_all_watchers();
+        self.keep_children();
+        self.perform_effects(&mut **self.host.borrow_mut());
     }
 
     /// Starts what the state wants and stops what it no longer wants. The state's borrow ends before the host runs, and what a
@@ -1180,13 +1299,7 @@ impl<F: Feature> Inner<F> {
             if !any && self.effects.borrow().is_empty() && self.outputs.borrow().is_empty() {
                 return;
             }
-            {
-                let mut host = self.host.borrow_mut();
-                host.render(&self.state.borrow(), &self.intents);
-                self.render_views();
-                self.subscribe(&mut **host);
-                self.perform_effects(&mut **host);
-            }
+            self.render_and_perform();
             self.tell_listeners();
             self.tell_all_watchers();
         }
@@ -1341,6 +1454,16 @@ mod tests {
         store.send_all([Intent::AddLater(1), Intent::Add(10), Intent::AddLater(2)]);
         assert_eq!(*seen.borrow(), ["add later 1", "add 10", "add later 2", "echo 1", "echo 2", "add 1", "add 2"]);
         assert_eq!(log.borrow().renders, [0, 10, 13]);
+    }
+
+    #[test]
+    fn a_weak_store_reaches_the_store_without_keeping_it() {
+        let (store, log) = store();
+        let weak = store.downgrade();
+        weak.upgrade().expect("the store is there").send(Intent::Add(1));
+        assert_eq!(log.borrow().renders, [0, 1]);
+        drop(store);
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]

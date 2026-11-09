@@ -2,10 +2,11 @@
 
 use showcase::document::{self, Ask, Choice, Content, Document, Running, TITLE_LIMIT};
 use showcase::export::{self, Steps};
+use showcase::history::{self, History};
 use showcase::library::{self, Library, Page};
 use showcase::service::{Doc, DocId, Found, Revision, Summary};
 use showcase::settings::{self, Preferences, Settings};
-use spiderland::{Asked, CloseAnswer, Error, Lifecycle, TestStore};
+use spiderland::{Asked, CloseAnswer, Error, Lifecycle, Standing, TestStore};
 
 fn summaries(docs: &[(u32, &str)]) -> Vec<Summary> {
     docs.iter()
@@ -104,7 +105,7 @@ fn the_selection_stays_on_its_document_as_rows_before_it_go() {
     assert_eq!(selected_at(&library), Some((2, DocId(3))));
 
     // A document before it was deleted.
-    library.send(library::Intent::Changed);
+    library.send(library::Intent::Document(DocId(1), document::Output::Changed));
     let (asked, ..) = search(&library);
     library.send(library::Intent::Found {
         asked,
@@ -113,14 +114,28 @@ fn the_selection_stays_on_its_document_as_rows_before_it_go() {
     assert_eq!(selected_at(&library), Some((1, DocId(3))), "the selection followed its document");
 }
 
-/// Scenario 7.
+/// Scenario 7: the library keeps a history page for as long as it is open.
 #[test]
 fn a_history_shows_over_the_list_and_back_goes_to_it() {
     let library = started_library();
     library.send(library::Intent::ShowHistory(DocId(2)));
-    assert_eq!(library.take_effects(), [library::Effect::LoadHistory(DocId(2))]);
     assert_eq!(library.read(library::State::shown), Page::History(DocId(2)));
+    assert_eq!(library.read(library::pages), [(DocId(2), Standing::Shown)], "the page is a child, on top");
+    assert!(library.take_effects().is_empty(), "the page loads itself");
 
+    library.send(library::Intent::Back);
+    assert_eq!(library.read(library::State::shown), Page::List);
+    assert!(library.read(library::pages).is_empty(), "going back lets the page go, and what it was loading");
+    library.send(library::Intent::Back);
+    assert_eq!(library.read(|state| state.pages.len()), 1, "the list stays");
+}
+
+/// Scenario 7: the page's own flow.
+#[test]
+fn a_history_page_loads_its_revisions_and_shows_while_on_top() {
+    let page = TestStore::<History>::new(history::State::new(DocId(2)));
+    assert_eq!(page.take_effects(), [history::Effect::Load(DocId(2))]);
+    assert_eq!(page.read(history::title), "Loading the history of document 2");
     let revisions = vec![
         Revision {
             revision: 2,
@@ -131,22 +146,70 @@ fn a_history_shows_over_the_list_and_back_goes_to_it() {
             title: "Beta".into(),
         },
     ];
-    library.send(library::Intent::HistoryLoaded {
-        id: DocId(2),
-        result: Ok(revisions.clone()),
-    });
-    assert_eq!(library.read(|state| state.history.clone()), Some((DocId(2), revisions.clone())));
+    page.send(history::Intent::Loaded(Ok(revisions.clone())));
+    assert_eq!(page.read(|state| state.revisions.clone()), Some(revisions));
+    assert_eq!(page.read(history::title), "History of document 2");
 
-    library.send(library::Intent::Back);
-    assert_eq!(library.read(library::State::shown), Page::List);
-    library.send(library::Intent::Back);
-    assert_eq!(library.read(|state| state.pages.len()), 1, "the list stays");
+    page.send(history::Intent::Life(Lifecycle::Shown));
+    assert!(page.read(|state| state.shown));
+    page.send(history::Intent::Life(Lifecycle::Hidden));
+    assert!(!page.read(|state| state.shown), "a page under another doesn't show");
 
-    library.send(library::Intent::HistoryLoaded {
-        id: DocId(2),
-        result: Ok(revisions),
-    });
-    assert_eq!(library.read(|state| state.history.clone()), None, "an answer for a page no longer shown is dropped");
+    let failing = TestStore::<History>::new(history::State::new(DocId(3)));
+    failing.take_effects();
+    failing.send(history::Intent::Loaded(Err(Error::Panicked)));
+    assert_eq!(failing.read(history::title), "The history failed to load: background work panicked.");
+}
+
+/// Scenarios 4 and 13: the library keeps each document open as a child, until it says it has closed.
+#[test]
+fn the_library_keeps_documents_open_until_they_close() {
+    let library = started_library();
+    library.send(library::Intent::Open(DocId(2)));
+    library.send(library::Intent::Open(DocId(2)));
+    assert_eq!(library.take_effects(), [library::Effect::OpenWindow(DocId(2)), library::Effect::OpenWindow(DocId(2))]);
+    assert_eq!(library.read(library::documents), [(DocId(2), Standing::Shown)], "a second window shares the document");
+
+    library.send(library::Intent::Document(DocId(2), document::Output::Closed(CloseAnswer::StayingOpen)));
+    assert_eq!(library.read(|state| state.open.clone()), [DocId(2)], "a document that stays is kept");
+    library.send(library::Intent::Document(DocId(2), document::Output::Reopen));
+    assert_eq!(library.take_effects(), [library::Effect::OpenWindow(DocId(2))], "and it gets a window when it asks");
+    library.send(library::Intent::Document(DocId(2), document::Output::Closed(CloseAnswer::Closed)));
+    assert!(library.read(|state| state.open.is_empty()), "a document that has closed is let go");
+}
+
+/// Scenario 13: closing the library asks every document, and closes once each has.
+#[test]
+fn closing_the_library_waits_for_every_document() {
+    let library = started_library();
+    library.send_all([library::Intent::Open(DocId(1)), library::Intent::Open(DocId(2))]);
+    library.take_effects();
+
+    library.send(library::Intent::Life(Lifecycle::CloseRequested));
+    assert_eq!(library.read(library::documents), [(DocId(1), Standing::Closing), (DocId(2), Standing::Closing)]);
+    assert_eq!(library.read(library::status), "Closing once every document has");
+    library.send(library::Intent::Open(DocId(3)));
+    assert!(library.take_effects().is_empty(), "nothing opens while it closes");
+
+    library.send(library::Intent::Document(DocId(1), document::Output::Closed(CloseAnswer::Closed)));
+    assert!(library.take_effects().is_empty(), "one document is still saving");
+    library.send(library::Intent::Document(DocId(2), document::Output::Closed(CloseAnswer::Closed)));
+    assert_eq!(library.take_effects(), [library::Effect::Close]);
+
+    // One document staying keeps the library, and the others hear it was called off.
+    let library = started_library();
+    library.send_all([library::Intent::Open(DocId(1)), library::Intent::Open(DocId(2))]);
+    library.take_effects();
+    library.send(library::Intent::Life(Lifecycle::CloseRequested));
+    library.send(library::Intent::Document(DocId(1), document::Output::Closed(CloseAnswer::StayingOpen)));
+    library.send(library::Intent::Document(DocId(2), document::Output::Closed(CloseAnswer::Closed)));
+    assert!(library.take_effects().is_empty(), "the library stays");
+    assert_eq!(library.read(library::documents), [(DocId(1), Standing::Shown)]);
+
+    // With nothing open, it closes at once.
+    let library = started_library();
+    library.send(library::Intent::Life(Lifecycle::CloseRequested));
+    assert_eq!(library.take_effects(), [library::Effect::Close]);
 }
 
 /// Scenario 8, the rules: a change goes out once, and only when something changed.
@@ -243,11 +306,37 @@ fn a_save_under_way_finishes_after_its_window_closes() {
     doc.send(document::Intent::Life(Lifecycle::CloseRequested));
     assert!(doc.take_effects().is_empty());
     assert_eq!(doc.read(|state| state.close.serial()), 1, "nothing is unsaved, so the window goes at once");
-    assert_eq!(doc.take_outputs(), [document::Output::Closed(CloseAnswer::Closed)]);
+    assert!(doc.take_outputs().is_empty(), "the document stays until its save is in");
 
     doc.send(document::Intent::Saved(Ok(Ok(2))));
     assert_eq!(doc.read(|state| (state.revision, state.saved.clone())), (2, content("Alpha", "b")));
-    assert_eq!(doc.take_outputs(), [document::Output::Changed]);
+    assert_eq!(doc.take_outputs(), [document::Output::Changed, document::Output::Closed(CloseAnswer::Closed)]);
+}
+
+/// Scenario 10: a window opened while the save finishes keeps the document.
+#[test]
+fn a_window_opened_during_the_save_keeps_the_document() {
+    let doc = loaded("Alpha", "a");
+    doc.send(document::Intent::EditBody("b".into()));
+    doc.send(document::Intent::Save);
+    doc.take_effects();
+    doc.send(document::Intent::Life(Lifecycle::CloseRequested));
+    doc.send(document::Intent::WindowOpened);
+    doc.send(document::Intent::Saved(Ok(Ok(2))));
+    assert_eq!(doc.take_outputs(), [document::Output::Changed], "it was opened again, so it hasn't closed");
+}
+
+/// Scenario 10: a save that fails after the windows closed keeps the document, which asks for a window.
+#[test]
+fn a_save_that_fails_after_the_windows_closed_asks_for_a_window() {
+    let doc = loaded("Alpha", "a");
+    doc.send(document::Intent::EditBody("b".into()));
+    doc.send(document::Intent::Save);
+    doc.take_effects();
+    doc.send(document::Intent::Life(Lifecycle::CloseRequested));
+    doc.send(document::Intent::Saved(Ok(Err("the disk is full".into()))));
+    assert_eq!(doc.take_outputs(), [document::Output::Closed(CloseAnswer::StayingOpen), document::Output::Reopen]);
+    assert!(doc.read(|state| state.dirty()), "the edits are kept");
 }
 
 /// Scenario 5.
@@ -285,7 +374,7 @@ fn a_delete_asks_first() {
     assert_eq!(doc.take_effects(), [document::Effect::Delete(DocId(1))]);
     doc.send(document::Intent::Deleted(Ok(Ok(()))));
     assert_eq!(doc.read(|state| state.close.serial()), 1, "its windows close");
-    assert_eq!(doc.take_outputs(), [document::Output::Changed]);
+    assert_eq!(doc.take_outputs(), [document::Output::Changed, document::Output::Closed(CloseAnswer::Closed)]);
     assert!(!doc.is_running(&Running::Watching), "a deleted document stops watching for changes");
 }
 
@@ -307,6 +396,7 @@ fn closing_with_edits_asks_and_goes_once_they_are_saved_or_dropped() {
     assert_eq!(doc.read(|state| state.close.serial()), 1, "it closes once the save is in");
     assert_eq!(doc.take_outputs(), [document::Output::Changed, document::Output::Closed(CloseAnswer::Closed)]);
 
+    doc.send(document::Intent::WindowOpened);
     doc.send(document::Intent::EditBody("c".into()));
     doc.send(document::Intent::Life(Lifecycle::CloseRequested));
     doc.send(document::Intent::Answer(Choice::Discard));

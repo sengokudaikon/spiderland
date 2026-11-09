@@ -314,6 +314,54 @@ fn a_history_shows_and_back_returns(headless: &Headless) {
     assert_eq!(revisions, ["Beta plan, revised", "Beta plan"]);
     scene.library().click(50.0, 10.0);
     assert!(!library.get_history_shown());
+
+    // Back before the history comes: the page is gone, and so is its answer.
+    let gate = scene.service.gate();
+    gate.hold();
+    scene.library().click(HISTORY, row(2));
+    gate.wait_for("history 3");
+    assert_eq!(library.get_history_title(), "Loading the history of document 3");
+    scene.library().click(50.0, 10.0);
+    gate.release("history 3");
+    scene.idle();
+    assert!(!library.get_history_shown());
+    gate.open();
+    scene.library().click(HISTORY, row(0));
+    scene.idle();
+    assert_eq!(library.get_history_title(), "History of document 1", "a page opened later shows only its own");
+}
+
+/// Scenario 13.
+fn closing_the_library_waits_for_every_document(headless: &Headless) {
+    let scene = Scene::start(headless);
+    let library = scene.app.library();
+    let editor = scene.open(DocId(1));
+    let input = headless.on(editor.window());
+    input.click(390.0, 40.0);
+    input.type_text(" again");
+
+    // Unsaved edits: the document asks first, and staying keeps the library.
+    scene.library().close();
+    assert_eq!(editor.get_asking(), "close");
+    input.click(CANCEL, ANSWERS);
+    assert!(library.window().is_visible() && editor.window().is_visible());
+    assert_eq!(library.get_status(), "Page 1 of 3", "the close was called off");
+
+    // A save under way: the editor closes at once, and the library waits for the save.
+    let gate = scene.service.gate();
+    gate.hold();
+    input.click(SAVE, EDITOR_BUTTONS);
+    gate.wait_for("save 1");
+    scene.library().close();
+    assert!(!editor.window().is_visible(), "nothing is unsaved, so the editor closes");
+    assert!(library.window().is_visible(), "the library waits for the save");
+    assert_eq!(library.get_status(), "Closing once every document has");
+    gate.release("save 1");
+    gate.open();
+    scene.idle();
+    assert!(!library.window().is_visible(), "and closes once it is in");
+    assert_eq!(scene.service.get(DocId(1)).unwrap().body, "the first draft again");
+    assert!(scene.app.document(DocId(1)).is_none(), "the library let the document go");
 }
 
 /// Scenario 11.
@@ -361,7 +409,7 @@ type Scenario = (&'static str, fn(&Headless));
 fn main() {
     let headless = Headless::install();
     headless.separate_windows();
-    let scenarios: [Scenario; 10] = [
+    let scenarios: [Scenario; 11] = [
         ("search drops an older answer, and pages move", search_drops_an_older_answer_and_pages_move),
         ("the selection follows its document", the_selection_follows_its_document),
         ("a title too long is refused in the box", a_title_too_long_is_refused_in_the_box),
@@ -374,6 +422,7 @@ fn main() {
         ("a delete asks first", a_delete_asks_first),
         ("a history shows, and back returns", a_history_shows_and_back_returns),
         ("a change made elsewhere reloads", a_change_made_elsewhere_reloads),
+        ("closing the library waits for every document", closing_the_library_waits_for_every_document),
         // It panics in an export on purpose, and the pool prints that panic.
         ("failures show, and the app goes on", failures_show_and_the_app_goes_on),
     ];

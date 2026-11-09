@@ -63,7 +63,8 @@ tag makes a GitHub release from that version's section.
   doesn't act on that fire.
 - `spiderland-slint`: `WindowView`, a view in one window, attached through `Windowed`. It renders while its window is minimized
   or hidden, and is gone once the window is dropped or the view says so. `attach_window` attaches one for as long as its window is
-  open, and lets the store decide whether the window closes. `ask_before_closing` does that for a window a host shows.
+  open, and lets the store decide whether the window closes. The window doesn't keep the store alive. `ask_before_closing` does
+  that for a window a host shows.
 - `spiderland-slint`: `WindowHost` and `Windowed`, so a host is handed its window rather than upgrading a `Weak` itself. `render`
   gets the window and isn't called once it is gone. `perform` always runs, with the window if it is still there, so a write's
   outcome is still heard.
@@ -71,14 +72,20 @@ tag makes a GitHub release from that version's section.
   effects come back wrapped, and what it emits comes back to the parent's `reduce` to act on. With the parent's `subscriptions`
   wrapping the child's and `Intents::map` for its host, a child maps whole. One kept in an `Option` stops what it runs once it
   goes back to `None`.
+- `spiderland`: `Children`, child stores a parent keeps, one for each key its state names. `Store::children` and
+  `Wiring::children` keep them in step after each batch: a child is built as its key appears, dropped once the key goes, and told
+  its `Standing` as a `Lifecycle` event as it is built and whenever it changes. A stack of pages, a slot and a set of documents
+  are each a shape of keys in the state. A child dropped stops what it runs, and an answer for it goes nowhere. `Child::tell`
+  says how a child hears its lifecycle, and a `Store` whose intent is `From<Lifecycle>` has it.
+- `spiderland`: `Store::downgrade` and `WeakStore`, to hold a store without keeping it alive.
 - `spiderland-slint`: `testing::Headless::separate_windows`, after which each component made gets a window of its own, and
   `Headless::on`, whose `testing::Input` sends real input to one window. `Input::close` asks a window to close, as its title
   bar's button does. Until `separate_windows`, every component shows in `Headless::window`, as before.
-- `showcase`: a small document library built on both crates, as their example and the test of what they can do. Twelve
+- `showcase`: a small document library built on both crates, as their example and the test of what they can do. Thirteen
   scenarios run through its stores: a search whose late answers are dropped, paging, a selection that follows its document,
   a form that refuses an edit, saves one at a time, an export with progress that stops, a delete that asks first, a history
-  page, settings shared by every window, a second window on one document, a close that asks first, and failures that show in
-  the state. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
+  page, settings shared by every window, a second window on one document, a close that asks first, failures that show in
+  the state, and closing the library, which waits for every document's saves. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
   the app has to write by hand is marked `Workaround:` in its code. `mise run showcase` runs it on the desktop.
 
 ### Changed

@@ -4,94 +4,88 @@
 
 use crate::document::{self, Ask, Choice, Document, Running};
 use crate::export::{self, Export};
+use crate::history::{self, History};
 use crate::library::{self, Library, Page};
 use crate::service::{DocId, EXPORT_STEPS, Service};
 use crate::settings::{self, Settings};
 use crate::view::{DocRow, EditorWindow, LibraryWindow, RevisionRow};
 use slint::{ComponentHandle, Timer};
-use spiderland::{Fired, Host, Intents, Lifecycle, Never, Slice, Store, Version, callbacks};
-use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, attach_window, on_watch};
+use spiderland::{Attached, Child, Children, Fired, Host, Intents, Lifecycle, Never, Slice, Store, Version, callbacks};
+use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, ask_before_closing, attach_window, on_watch};
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::fmt;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::time::Duration;
 
-/// The app: one settings store, one library with its window, and a store for each document opened, with its windows.
+/// The app: one settings store, and the library with its window. The library keeps the documents open and its history pages as
+/// children, each a store of its own.
 pub struct App(Rc<Inner>);
 
 struct Inner {
-    service: Service,
-    background: Background,
     settings: Store<Settings>,
     library: Store<Library>,
     library_window: LibraryWindow,
-    /// Each document opened, kept after its windows close so that a save under way finishes here.
-    documents: RefCell<BTreeMap<DocId, Opened>>,
+    documents: Children<DocId, Opened>,
 }
-
-struct Opened {
-    store: Store<Document>,
-    windows: Windows,
-}
-
-/// The windows on one document. Each has a view attached to the document's store for as long as it is open.
-type Windows = Rc<RefCell<Vec<EditorWindow>>>;
 
 impl fmt::Debug for App {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("App")
-            .field("documents", &self.0.documents.borrow().keys().collect::<Vec<_>>())
-            .finish_non_exhaustive()
+        f.debug_struct("App").field("documents", &self.0.documents.keys()).finish_non_exhaustive()
     }
 }
 
 impl App {
     /// Builds the app on `service`, with work going to `background`, and shows the library.
     pub fn start(service: Service, background: Background) -> App {
-        let inner = Rc::new_cyclic(|app: &Weak<Inner>| {
-            let settings = Store::<Settings>::new(settings::Preferences::default(), Quiet);
-            let library_window = LibraryWindow::new().expect("the library window");
-            let host = LibraryHost {
-                service: service.clone(),
-                background: background.clone(),
-                rows: Rows::default(),
-                revisions: Rows::default(),
-                shown: Slice::default(),
-                app: app.clone(),
-            };
-            library_window.set_rows(host.rows.model());
-            library_window.set_revisions(host.revisions.model());
-            // The library keeps a copy of the preferences. Shared, it gets them as they are now, and each change after.
-            let library = Store::<Library>::build(library::State::new(settings::Preferences::default()), Windowed::new(&library_window, host));
-            settings.share(&library.intents(), |preferences| *preferences, |preferences| library::Intent::Preferences(*preferences));
-            let library = library.start();
-            callbacks!(library_window, library.intents(), {
-                on_typed: |query| library::Intent::Typed(query.into()),
-                on_select: |id| library::Intent::Select(DocId(id as u32)),
-                on_show_history: |id| library::Intent::ShowHistory(DocId(id as u32)),
-                on_open_document: |id| library::Intent::Open(DocId(id as u32)),
-                on_previous_page: || library::Intent::PreviousPage,
-                on_next_page: || library::Intent::NextPage,
-                on_refresh: || library::Intent::Refresh,
-                on_back: || library::Intent::Back,
-            });
-            callbacks!(library_window, settings.intents(), {
-                on_page_size_changed: |size| settings::Intent::PageSize(size.max(0) as usize),
-                on_word_count_changed: |on| settings::Intent::WordCount(on),
-            });
-            Inner {
-                service,
-                background,
-                settings,
-                library,
-                library_window,
-                documents: RefCell::default(),
-            }
+        let settings = Store::<Settings>::new(settings::Preferences::default(), Quiet);
+        let library_window = LibraryWindow::new().expect("the library window");
+        let documents = Children::default();
+        let host = LibraryHost {
+            service: service.clone(),
+            background: background.clone(),
+            rows: Rows::default(),
+            shown: Slice::default(),
+            documents: documents.clone(),
+        };
+        library_window.set_rows(host.rows.model());
+        // The library keeps a copy of the preferences. Shared, it gets them as they are now, and each change after.
+        let wiring = Store::<Library>::build(library::State::new(settings::Preferences::default()), Windowed::new(&library_window, host));
+        settings.share(&wiring.intents(), |preferences| *preferences, |preferences| library::Intent::Preferences(*preferences));
+        // Each history page is a store of its own, with a view in the library's window. Going back drops it.
+        wiring.children(&Children::default(), library::pages, {
+            let (service, background, window) = (service.clone(), background.clone(), library_window.clone_strong());
+            move |&id, _| HistoryPage::new(id, &service, &background, &window)
         });
-        inner.library_window.show().expect("show the library");
-        App(inner)
+        // Each document is a store of its own, which tells the library what it says.
+        wiring.children(&documents, library::documents, {
+            let settings = settings.clone();
+            move |&id, library| Opened::new(id, &service, &background, &settings, library)
+        });
+        let library = wiring.start();
+        callbacks!(library_window, library.intents(), {
+            on_typed: |query| library::Intent::Typed(query.into()),
+            on_select: |id| library::Intent::Select(DocId(id as u32)),
+            on_show_history: |id| library::Intent::ShowHistory(DocId(id as u32)),
+            on_open_document: |id| library::Intent::Open(DocId(id as u32)),
+            on_previous_page: || library::Intent::PreviousPage,
+            on_next_page: || library::Intent::NextPage,
+            on_refresh: || library::Intent::Refresh,
+            on_back: || library::Intent::Back,
+        });
+        callbacks!(library_window, settings.intents(), {
+            on_page_size_changed: |size| settings::Intent::PageSize(size.max(0) as usize),
+            on_word_count_changed: |on| settings::Intent::WordCount(on),
+        });
+        // Closing the library closes the app, once every document has closed.
+        ask_before_closing(&library_window, &library.intents(), || Some(library::Intent::Life(Lifecycle::CloseRequested)));
+        library_window.show().expect("show the library");
+        App(Rc::new(Inner {
+            settings,
+            library,
+            library_window,
+            documents,
+        }))
     }
 
     /// The library's window.
@@ -111,81 +105,99 @@ impl App {
 
     /// Opens a window on `id`, and returns it. A document already open gets another window on the same store.
     pub fn open(&self, id: DocId) -> EditorWindow {
-        open(&self.0, id)
+        self.0.library.send(library::Intent::Open(id));
+        let opened = self.0.documents.get(&id).expect("the library opened the document");
+        let windows = opened.windows.borrow();
+        windows.last().expect("and a window on it").clone_strong()
     }
 
-    /// The store of `id`, once it has been opened.
+    /// The store of `id`, while it is open.
     pub fn document(&self, id: DocId) -> Option<Store<Document>> {
-        self.0.documents.borrow().get(&id).map(|opened| opened.store.clone())
+        self.0.documents.get(&id).map(|opened| opened.store.clone())
     }
 
     /// The windows on `id` that are open.
     pub fn windows(&self, id: DocId) -> Vec<EditorWindow> {
-        self.0
-            .documents
-            .borrow()
-            .get(&id)
-            .map(|opened| {
-                let windows = opened.windows.borrow();
-                windows.iter().filter(|window| window.window().is_visible()).map(ComponentHandle::clone_strong).collect()
-            })
-            .unwrap_or_default()
+        let Some(opened) = self.0.documents.get(&id) else {
+            return Vec::new();
+        };
+        let windows = opened.windows.borrow();
+        windows.iter().filter(|window| window.window().is_visible()).map(ComponentHandle::clone_strong).collect()
     }
 
     /// Hides every window, so the app can be dropped.
     pub fn close(&self) {
-        for opened in self.0.documents.borrow().values() {
-            for window in opened.windows.borrow().iter() {
-                let _ = window.hide();
+        for id in self.0.documents.keys() {
+            if let Some(opened) = self.0.documents.get(&id) {
+                for window in opened.windows.borrow().iter() {
+                    let _ = window.hide();
+                }
             }
         }
         let _ = self.0.library_window.hide();
     }
 }
 
-fn open(inner: &Inner, id: DocId) -> EditorWindow {
-    let window = EditorWindow::new().expect("an editor window");
-    let mut documents = inner.documents.borrow_mut();
-    documents.retain(|_, opened| opened.store.try_read(|state| !state.deleted).unwrap_or(true));
-    if let Some(opened) = documents.get(&id) {
-        // The windows closed before go now. The document stays, with any save under way.
-        let hidden: Vec<_> = opened.windows.borrow_mut().extract_if(.., |window| !window.window().is_visible()).collect();
-        let_go(hidden);
-        show(&window, &opened.store, &opened.windows);
-    } else {
+/// One document the library keeps: its store, and the windows on it. Each window has a view attached to the store for as long as
+/// it is open.
+struct Opened {
+    store: Store<Document>,
+    windows: RefCell<Vec<EditorWindow>>,
+}
+
+impl Opened {
+    /// Builds the store of `id`, which takes the settings and tells the library what it says.
+    fn new(id: DocId, service: &Service, background: &Background, settings: &Store<Settings>, library: &Intents<library::Intent>) -> Opened {
         let host = DocumentHost {
-            service: inner.service.clone(),
-            background: inner.background.clone(),
+            service: service.clone(),
+            background: background.clone(),
             export: ExportHost {
                 id,
-                service: inner.service.clone(),
-                background: inner.background.clone(),
+                service: service.clone(),
+                background: background.clone(),
             },
         };
         let wiring = Store::<Document>::build(document::State::new(id, settings::Preferences::default()), host);
-        inner
-            .settings
-            .share(&wiring.intents(), |preferences| *preferences, |preferences| document::Intent::Preferences(*preferences));
-        wiring.forward(&inner.library.intents(), |output| {
-            (*output == document::Output::Changed).then_some(library::Intent::Changed)
-        });
-        let store = wiring.start();
-        let windows = Windows::default();
-        show(&window, &store, &windows);
-        documents.insert(id, Opened { store, windows });
+        settings.share(&wiring.intents(), |preferences| *preferences, |preferences| document::Intent::Preferences(*preferences));
+        wiring.forward(library, move |output| library::Intent::Document(id, *output));
+        Opened {
+            store: wiring.start(),
+            windows: RefCell::default(),
+        }
     }
-    window.show().expect("show an editor");
-    window
+
+    /// Opens another window on the document, which shows it at once, and lets go of the windows closed before.
+    fn open_window(&self) {
+        let hidden: Vec<_> = self.windows.borrow_mut().extract_if(.., |window| !window.window().is_visible()).collect();
+        let_go(hidden);
+        let window = EditorWindow::new().expect("an editor window");
+        show(&window, &self.store);
+        self.windows.borrow_mut().push(window.clone_strong());
+        self.store.send(document::Intent::WindowOpened);
+        window.show().expect("show an editor");
+    }
+}
+
+impl Child for Opened {
+    fn tell(&self, life: Lifecycle) {
+        self.store.tell(life);
+    }
+}
+
+/// The library lets a document go from inside one of its windows' callbacks, so its windows go on the next turn.
+impl Drop for Opened {
+    fn drop(&mut self) {
+        let_go(std::mem::take(self.windows.get_mut()));
+    }
 }
 
 /// Attaches a view in `window` to the document, which it shows at once, and sends what the user does there to the document. One
 /// of several windows simply closes, and the document stays with the others. The last one asks the document, which may ask about
 /// unsaved edits first.
-fn show(window: &EditorWindow, store: &Store<Document>, windows: &Windows) {
+fn show(window: &EditorWindow, store: &Store<Document>) {
     attach_window(store, window, EditorView::default(), |store| {
         (store.views() == 1).then_some(document::Intent::Life(Lifecycle::CloseRequested))
     });
-    windows.borrow_mut().push(window.clone_strong());
     let intents = store.intents();
     callbacks!(window, intents, {
         on_title_edited: |title| document::Intent::EditTitle(title.into()),
@@ -213,9 +225,7 @@ fn let_go(windows: Vec<EditorWindow>) {
 struct Quiet;
 
 impl Host<Settings> for Quiet {
-    fn render(&mut self, _: &settings::Preferences, _: &Intents<settings::Intent>) {}
-
-    fn perform(&mut self, effect: spiderland::Never, _: &Intents<settings::Intent>) {
+    fn perform(&mut self, effect: Never, _: &Intents<settings::Intent>) {
         match effect {}
     }
 }
@@ -224,9 +234,8 @@ struct LibraryHost {
     service: Service,
     background: Background,
     rows: Rows<DocRow>,
-    revisions: Rows<RevisionRow>,
     shown: Slice<(Version, Option<DocId>)>,
-    app: Weak<Inner>,
+    documents: Children<DocId, Opened>,
 }
 
 impl WindowHost<Library> for LibraryHost {
@@ -247,43 +256,94 @@ impl WindowHost<Library> for LibraryHost {
         window.set_status(library::status(state).into());
         window.set_page_size(state.preferences.page_size as i32);
         window.set_word_count(state.preferences.word_count);
-        let history = match state.shown() {
-            Page::List => None,
-            Page::History(id) => Some(id),
-        };
-        window.set_history_shown(history.is_some());
-        let revisions = state
-            .history
-            .as_ref()
-            .filter(|(id, _)| Some(*id) == history)
-            .map(|(_, revisions)| revisions.as_slice())
-            .unwrap_or_default();
-        window.set_history_title(history.map(|id| format!("History of document {}", id.0)).unwrap_or_default().into());
-        self.revisions.sync(revisions.iter().map(|revision| RevisionRow {
-            revision: revision.revision as i32,
-            title: revision.title.as_str().into(),
-        }));
+        // The history page shows itself, through its own view.
+        window.set_history_shown(matches!(state.shown(), Page::History(_)));
     }
 
-    fn perform(&mut self, _: Option<&LibraryWindow>, effect: library::Effect, intents: &Intents<library::Intent>) {
-        let service = self.service.clone();
+    fn perform(&mut self, window: Option<&LibraryWindow>, effect: library::Effect, intents: &Intents<library::Intent>) {
         match effect {
             library::Effect::Search { asked, query, page, size } => {
+                let service = self.service.clone();
                 self.background
                     .run(intents, move || service.search(&query, page, size), move |result| library::Intent::Found { asked, result });
             }
-            library::Effect::LoadHistory(id) => {
-                self.background
-                    .run(intents, move || service.history(id), move |result| library::Intent::HistoryLoaded { id, result });
+            // The document is the library's child, built in this batch if it is new.
+            library::Effect::OpenWindow(id) => {
+                if let Some(opened) = self.documents.get(&id) {
+                    opened.open_window();
+                }
             }
-            // Workaround: no children a parent owns. Documents aren't the library's children, so its host opens them through the
-            // app.
-            library::Effect::Open(id) => {
-                if let Some(app) = self.app.upgrade() {
-                    open(&app, id);
+            library::Effect::Close => {
+                if let Some(window) = window {
+                    let _ = window.hide();
                 }
             }
         }
+    }
+}
+
+/// One history page the library keeps: its store, and its view in the library's window.
+struct HistoryPage {
+    store: Store<History>,
+    _view: Attached,
+}
+
+impl HistoryPage {
+    fn new(id: DocId, service: &Service, background: &Background, window: &LibraryWindow) -> HistoryPage {
+        let host = HistoryHost {
+            service: service.clone(),
+            background: background.clone(),
+        };
+        let store = Store::new(history::State::new(id), host);
+        let view = store.attach(Windowed::new(window, HistoryView::default()));
+        HistoryPage { store, _view: view }
+    }
+}
+
+impl Child for HistoryPage {
+    fn tell(&self, life: Lifecycle) {
+        self.store.tell(life);
+    }
+}
+
+/// Loads a history page's saved states.
+struct HistoryHost {
+    service: Service,
+    background: Background,
+}
+
+impl Host<History> for HistoryHost {
+    fn perform(&mut self, history::Effect::Load(id): history::Effect, intents: &Intents<history::Intent>) {
+        let service = self.service.clone();
+        self.background.run(intents, move || service.history(id), history::Intent::Loaded);
+    }
+}
+
+/// Shows a history page in the library's window while it is on top. Each page has its rows, and puts them in the window as it
+/// comes to the top.
+#[derive(Default)]
+struct HistoryView {
+    revisions: Rows<RevisionRow>,
+    showing: bool,
+}
+
+impl WindowView<History> for HistoryView {
+    type Window = LibraryWindow;
+
+    fn render(&mut self, window: &LibraryWindow, state: &history::State, _: &Intents<history::Intent>) {
+        if !state.shown {
+            self.showing = false;
+            return;
+        }
+        if !self.showing {
+            window.set_revisions(self.revisions.model());
+            self.showing = true;
+        }
+        window.set_history_title(history::title(state).into());
+        self.revisions.sync(state.revisions.iter().flatten().map(|revision| RevisionRow {
+            revision: revision.revision as i32,
+            title: revision.title.as_str().into(),
+        }));
     }
 }
 

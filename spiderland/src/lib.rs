@@ -80,6 +80,11 @@
 //! it starts, so its listeners hear the start too. [`Store::share`] keeps another store current on part of the state, however
 //! late that store is built.
 //!
+//! A parent can own child stores. Its state names which children exist, by key, and where each stands, and
+//! [`Store::children`] keeps a [`Children`] in step: it builds each child as its key appears, drops it once the key goes, and
+//! tells it its [`Standing`] as a [`Lifecycle`] event. A stack of pages, a slot and a set of documents are each a shape of
+//! keys in the state. A child that is dropped stops what it runs, and an answer for it goes nowhere.
+//!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
 //!
 //! A store has one host, which runs its effects, and any number of [`View`]s, which only show its state. A view attaches with
@@ -107,6 +112,7 @@
 //!   child that ends is an `Option` going back to `None`, which stops what it runs.
 
 mod background;
+mod children;
 mod error;
 mod lifecycle;
 mod macros;
@@ -119,11 +125,12 @@ mod tracked;
 mod wake;
 
 pub use background::{Background, EventLoop, Job, Progress, Stop, Stopping};
+pub use children::{Child, Children, Standing};
 pub use error::Error;
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::{Fired, Pulse};
 pub use requests::{Asked, Latest, OneAtATime};
-pub use store::{Attached, Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, View, Wiring, start, step, subscriptions};
+pub use store::{Attached, Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, View, WeakStore, Wiring, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
 pub use test_store::TestStore;
 pub use tracked::{CheckedSlice, Input, Inputs, Slice, Tracked, Version};
