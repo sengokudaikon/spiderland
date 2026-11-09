@@ -143,6 +143,13 @@ runs and the box keeps the refused text. Fire a `Pulse` from the reducer and set
 It runs on a later turn of the event loop, and repeats collapse into one. What it sends arrives as a separate intent, after the
 render that caused it.
 
+**Inputs that come fast**
+
+A drag, a scrub or a resize sends an intent per event, and each is a batch of its own: a reduce, a render, the subscriptions and
+the effects. Send such an input through a `Sampled`, which keeps only the latest and sends it once per turn of the event loop.
+Send what has to follow it, such as the drop at a drag's end, through the same sampler's `send`, so it goes after the last move.
+A debounce waits for an input to stop, which suits a search, not a drag that shows where it is as it moves.
+
 **Lists inside rows**
 
 Use `rows.sync(inner.fill(…))`, or `rows.sync_by(key, inner.fill_by(key, …))` with the same key. A plain `Rows` in a row can lose a

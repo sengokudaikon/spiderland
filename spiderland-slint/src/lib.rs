@@ -9,17 +9,20 @@
 //!   can be let go of ([`Background::local`]) and for work that can't ([`Background::finish`]). It is
 //!   [`spiderland::Background`] on [`Slint`]'s loop.
 //! - [`every`] and [`after`]: a repeating intent and a delayed one, each ending with the timer it returns.
+//! - [`Sampled`]: an input that comes fast, such as a drag, sent once per turn of the event loop as its latest value.
 //! - [`on_wake`] and [`on_watch`]: a service on another thread telling a feature that something changed.
 //! - [`Rows`]: a list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. [`InnerRows`]
 //!   keeps a list inside each row.
 //! - `testing`, behind that feature: the real window with no display, driven by real input.
 
 mod rows;
+mod sampled;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod window;
 
 pub use rows::{InnerRows, Rows};
+pub use sampled::Sampled;
 pub use window::{WindowHost, WindowView, Windowed, ask_before_closing, attach_window};
 
 use slint::{Timer, TimerMode};
