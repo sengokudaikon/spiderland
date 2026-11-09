@@ -3807,6 +3807,7 @@ dependencies = [
  "slint",
  "spiderland",
  "spiderland-slint",
+ "strum",
  "tokio",
 ]
 

@@ -104,6 +104,14 @@ pub trait Feature: 'static {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Never {}
 
+/// Names a value that can't happen, for a trail that names its steps by `Into<&'static str>`, as [`Store::observe`] says. There is
+/// never one to name, so one trail covers a feature with no effects or no outputs.
+impl From<&Never> for &'static str {
+    fn from(never: &Never) -> Self {
+        match *never {}
+    }
+}
+
 /// What one `reduce` asks for. After the next render its effects are performed in order, and then its outputs go out in order.
 #[derive(Debug)]
 pub struct Effects<E, O = Never> {
@@ -286,12 +294,18 @@ pub struct Step<E, O = Never> {
     pub outputs: Vec<O>,
 }
 
-/// What a store is about to run, as [`Store::observe`] shows it.
+/// One step of what a store runs, as [`Store::observe`] shows it. More kinds of step may come, so a match over it ends with `_`.
+#[non_exhaustive]
 pub enum Seen<'a, F: Feature> {
     /// An intent, just before it is reduced.
     Intent(&'a F::Intent),
+    /// The state just after an intent is reduced, and as the store starts, once [`Feature::start`] has run. The last one before
+    /// a batch's effects is the state its render showed.
+    State(&'a F::State),
     /// An effect, just before it is performed.
     Effect(&'a F::Effect),
+    /// An output, just before the store's listeners hear it.
+    Output(&'a F::Output),
 }
 
 impl<F: Feature> Clone for Seen<'_, F> {
@@ -305,12 +319,16 @@ impl<F: Feature> Copy for Seen<'_, F> {}
 impl<F: Feature> fmt::Debug for Seen<'_, F>
 where
     F::Intent: fmt::Debug,
+    F::State: fmt::Debug,
     F::Effect: fmt::Debug,
+    F::Output: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Seen::Intent(intent) => f.debug_tuple("Intent").field(intent).finish(),
+            Seen::State(state) => f.debug_tuple("State").field(state).finish(),
             Seen::Effect(effect) => f.debug_tuple("Effect").field(effect).finish(),
+            Seen::Output(output) => f.debug_tuple("Output").field(output).finish(),
         }
     }
 }
@@ -755,20 +773,32 @@ impl<F: Feature> Store<F> {
         }
     }
 
-    /// Calls `observer` with each intent just before it is reduced and each effect just before it is performed, in the order the
-    /// store runs them. It suits a trail of what led to a fault: the last intent seen before a reducer panics is the one that
-    /// panicked.
+    /// Calls `observer` with each step the store runs, in order, as a [`Seen`]: each intent just before it is reduced and the
+    /// state just after, each effect just before it is performed, and each output just before it is heard. A batch shows as its
+    /// intents, each with the state after it, then its effects, then its outputs.
     ///
-    /// It is handed a reference, so nothing is copied unless it copies, and nothing needs `Debug`. Keep a name, not the intent
-    /// itself, because an intent can carry a whole snapshot.
+    /// It suits a trail of what led to a fault, and what changed on the way. An intent with no state after it is the one whose
+    /// reducer panicked.
     ///
-    /// It sees only what runs after it is added. To see the store's start too, add it on a [`Wiring`]. It lives as long as the
-    /// store, so it shouldn't hold the store. If it panics, the
-    /// intent or effect it was shown is lost, as with a reducer that panics.
+    /// It is handed references, so nothing is copied unless it copies, and nothing needs `Debug`. Keep a name, not the intent
+    /// itself, because an intent can carry a whole snapshot. From the state, keep what the trail needs, such as a status line, and
+    /// record it when it differs from the one kept before.
+    ///
+    /// Rust has no name for an enum's variant on its own. A trail that names its steps can ask for
+    /// `&F::Intent: Into<&'static str>`, which a match or a derive provides. [`Never`] meets it, so one trail covers a feature with
+    /// no effects or no outputs.
+    ///
+    /// No borrow is held while it is shown an intent, an effect or an output, so it can add another observer, or send an intent,
+    /// which waits its turn. While it is shown the state, the state is borrowed: it can read it, as [`Store::try_read`] does,
+    /// and nothing can change it.
+    ///
+    /// It sees only what runs after it is added. To see the store's start too, add it on a [`Wiring`], which shows it the state
+    /// once [`Feature::start`] has run. It lives as long as the store, so it shouldn't hold the store. If it panics when shown an
+    /// intent, an effect or an output, that step is lost, as with a reducer that panics.
     ///
     /// ```
     /// use spiderland::{Effects, Feature, Host, Intents, Never, Seen, Store};
-    /// use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+    /// use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc};
     ///
     /// struct Counter;
     /// enum Intent {
@@ -800,26 +830,34 @@ impl<F: Feature> Store<F> {
     ///     fn perform(&mut self, _: Effect, _: &Intents<Intent>) {}
     /// }
     ///
-    /// // The last three things the store ran, by name.
+    /// // The last four things the store ran, by name, and each count it reached.
     /// let trail = Rc::new(RefCell::new(VecDeque::new()));
     /// let store = Store::new(0, Quiet);
-    /// let keeping = Rc::clone(&trail);
+    /// let (keeping, last) = (Rc::clone(&trail), Cell::new(0));
     /// store.observe(move |seen| {
-    ///     let name = match seen {
-    ///         Seen::Intent(Intent::Add(_)) => "Add",
-    ///         Seen::Intent(Intent::Save) => "Save",
-    ///         Seen::Effect(Effect::Write(_)) => "Write",
+    ///     let line = match seen {
+    ///         Seen::Intent(Intent::Add(_)) => "Add".to_owned(),
+    ///         Seen::Intent(Intent::Save) => "Save".to_owned(),
+    ///         Seen::State(count) => {
+    ///             // Only a count that changed.
+    ///             if last.replace(*count) == *count {
+    ///                 return;
+    ///             }
+    ///             format!("now {count}")
+    ///         }
+    ///         Seen::Effect(Effect::Write(_)) => "Write".to_owned(),
+    ///         _ => return,
     ///     };
     ///     let mut trail = keeping.borrow_mut();
-    ///     if trail.len() == 3 {
+    ///     if trail.len() == 4 {
     ///         trail.pop_front();
     ///     }
-    ///     trail.push_back(name);
+    ///     trail.push_back(line);
     /// });
     /// store.send(Intent::Add(1));
     /// store.send(Intent::Add(2));
     /// store.send(Intent::Save);
-    /// assert_eq!(*trail.borrow(), ["Add", "Save", "Write"]);
+    /// assert_eq!(*trail.borrow(), ["Add", "now 3", "Save", "Write"]);
     /// ```
     pub fn observe(&self, observer: impl Fn(Seen<'_, F>) + 'static) {
         let mut observers = self.0.observers.borrow_mut();
@@ -953,7 +991,7 @@ impl<F: Feature> Wiring<F> {
         Inner::add_view(&(self.0).0, view).1
     }
 
-    /// [`Store::observe`], from the start, so it sees the effects [`Feature::start`] asked for as well.
+    /// [`Store::observe`], from the start, so it sees the state [`Feature::start`] left and the effects it asked for as well.
     pub fn observe(&self, observer: impl Fn(Seen<'_, F>) + 'static) {
         self.0.observe(observer);
     }
@@ -965,6 +1003,8 @@ impl<F: Feature> Wiring<F> {
         let mut effects = Effects::detached();
         F::start(&mut inner.state.borrow_mut(), &mut effects);
         inner.effects.borrow_mut().extend(effects.effects);
+        // Still marked at work, so what the observer sends waits for the first render.
+        inner.observe(Seen::State(&*inner.state.borrow()));
         inner.draining.set(false);
         inner.render_first();
         inner.drain();
@@ -1295,6 +1335,7 @@ impl<F: Feature> Inner<F> {
                 self.effects.borrow_mut().extend(effects.effects);
                 self.outputs.borrow_mut().extend(effects.outputs);
                 any = true;
+                self.observe(Seen::State(&*self.state.borrow()));
             }
             if !any && self.effects.borrow().is_empty() && self.outputs.borrow().is_empty() {
                 return;
@@ -1305,7 +1346,7 @@ impl<F: Feature> Inner<F> {
         }
     }
 
-    /// No borrow is held while an observer runs, so one can add another or send an intent, which waits its turn.
+    /// No borrow of the observers is held while one runs, so one can add another, or send an intent, which waits its turn.
     fn observe(&self, seen: Seen<'_, F>) {
         let observers = Rc::clone(&self.observers.borrow());
         for observer in observers.iter() {
@@ -1321,6 +1362,7 @@ impl<F: Feature> Inner<F> {
             let Some(output) = next else {
                 break;
             };
+            self.observe(Seen::Output(&output));
             let listeners = Rc::clone(&self.listeners.borrow());
             for listener in listeners.iter() {
                 if !listener(&output) {
@@ -1452,7 +1494,23 @@ mod tests {
         let (store, log) = store();
         let seen = observed(&store);
         store.send_all([Intent::AddLater(1), Intent::Add(10), Intent::AddLater(2)]);
-        assert_eq!(*seen.borrow(), ["add later 1", "add 10", "add later 2", "echo 1", "echo 2", "add 1", "add 2"]);
+        assert_eq!(
+            *seen.borrow(),
+            [
+                "add later 1",
+                "= 0",
+                "add 10",
+                "= 10",
+                "add later 2",
+                "= 10",
+                "echo 1",
+                "echo 2",
+                "add 1",
+                "= 11",
+                "add 2",
+                "= 13"
+            ]
+        );
         assert_eq!(log.borrow().renders, [0, 10, 13]);
     }
 
@@ -1886,7 +1944,7 @@ mod tests {
         assert_eq!(log.borrow().renders, [0, 4], "dropping the store ends every mapped sender");
     }
 
-    /// What an observer of a counter saw, by name. The counter's intents aren't `Debug`.
+    /// What an observer of a counter saw, by name, with each state as `= count`. The counter's intents aren't `Debug`.
     fn observed(store: &Store<Counter>) -> Rc<RefCell<Vec<String>>> {
         let seen = Rc::<RefCell<Vec<String>>>::default();
         let keeping = Rc::clone(&seen);
@@ -1894,24 +1952,70 @@ mod tests {
             keeping.borrow_mut().push(match seen {
                 Seen::Intent(Intent::Add(by)) => format!("add {by}"),
                 Seen::Intent(Intent::AddLater(by)) => format!("add later {by}"),
+                Seen::State(count) => format!("= {count}"),
                 Seen::Effect(Effect::Echo(by)) => format!("echo {by}"),
+                Seen::Output(never) => match *never {},
             });
         });
         seen
     }
 
     #[test]
-    fn an_observer_sees_intents_and_effects_in_the_order_they_run() {
+    fn an_observer_sees_intents_states_and_effects_in_the_order_they_run() {
         let (store, log) = store();
         let seen = observed(&store);
         log.borrow_mut().send_from_render = Some(1);
         store.send(Intent::AddLater(2));
-        assert_eq!(*seen.borrow(), ["add later 2", "echo 2", "add 1", "add 2"]);
+        assert_eq!(*seen.borrow(), ["add later 2", "= 0", "echo 2", "add 1", "= 1", "add 2", "= 3"]);
         assert_eq!(log.borrow().renders, [0, 0, 3]);
     }
 
     #[test]
-    fn the_last_intent_seen_before_a_reducer_panics_is_the_one_that_panicked() {
+    fn an_observer_sees_the_state_after_each_intent_of_a_batch() {
+        let (store, log) = store();
+        let seen = observed(&store);
+        store.send_all([Intent::Add(1), Intent::Add(2)]);
+        assert_eq!(*seen.borrow(), ["add 1", "= 1", "add 2", "= 3"], "so each change is laid to the intent that made it");
+        assert_eq!(log.borrow().renders, [0, 3], "while the render shows only the last");
+    }
+
+    #[test]
+    fn an_observer_sees_each_output_before_it_is_heard() {
+        struct Teller;
+        impl Feature for Teller {
+            type State = ();
+            type Intent = &'static str;
+            type Effect = Never;
+            type Output = &'static str;
+            type Subscription = Never;
+            fn reduce(_: &mut (), intent: &'static str, effects: &mut Effects<Never, &'static str>) {
+                effects.emit(intent);
+            }
+        }
+        struct Quiet;
+        impl Host<Teller> for Quiet {
+            fn perform(&mut self, effect: Never, _: &Intents<&'static str>) {
+                match effect {}
+            }
+        }
+        let store = Store::<Teller>::new((), Quiet);
+        let order = Rc::<RefCell<Vec<String>>>::default();
+        let (seeing, hearing) = (Rc::clone(&order), Rc::clone(&order));
+        store.observe(move |seen| {
+            if let Seen::Output(said) = seen {
+                seeing.borrow_mut().push(format!("seen {said}"));
+            }
+        });
+        store.forward(&store.intents(), move |said| {
+            hearing.borrow_mut().push(format!("heard {said}"));
+            None::<&'static str>
+        });
+        store.send("hello");
+        assert_eq!(*order.borrow(), ["seen hello", "heard hello"]);
+    }
+
+    #[test]
+    fn the_intent_seen_with_no_state_after_it_is_the_one_whose_reducer_panicked() {
         struct Fragile;
         impl Feature for Fragile {
             type State = ();
@@ -1926,17 +2030,17 @@ mod tests {
         let store = TestStore::<Fragile>::new(());
         let trail = Rc::<RefCell<Vec<&'static str>>>::default();
         let keeping = Rc::clone(&trail);
-        store.store().observe(move |seen| {
-            if let Seen::Intent(intent) = seen {
-                keeping.borrow_mut().push(intent);
-            }
+        store.store().observe(move |seen| match seen {
+            Seen::Intent(intent) => keeping.borrow_mut().push(intent),
+            Seen::State(()) => keeping.borrow_mut().push("reduced"),
+            _ => {}
         });
         store.send("good");
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.send("bad")));
         assert!(panicked.is_err());
         assert_eq!(trail.borrow().last(), Some(&"bad"));
         store.send("after");
-        assert_eq!(*trail.borrow(), ["good", "bad", "after"], "and the store goes on being observed");
+        assert_eq!(*trail.borrow(), ["good", "reduced", "bad", "after", "reduced"], "and the store goes on being observed");
     }
 
     #[test]
@@ -1957,7 +2061,7 @@ mod tests {
         });
         store.send(Intent::Add(1));
         store.send(Intent::Add(2));
-        assert_eq!(*first.borrow(), ["add 1", "add 2"]);
+        assert_eq!(*first.borrow(), ["add 1", "= 1", "add 2", "= 3"]);
         assert_eq!(*second.borrow(), ["add 2"]);
         // The adding observer holds a clone of `store`: let go of it, or the two keep each other alive.
         *store.0.observers.borrow_mut() = Rc::from(Vec::new());

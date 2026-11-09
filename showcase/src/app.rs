@@ -8,6 +8,7 @@ use crate::history::{self, History};
 use crate::library::{self, Library, Page};
 use crate::service::{DocId, EXPORT_STEPS, Service};
 use crate::settings::{self, Settings};
+use crate::trail::Trail;
 use crate::view::{DocRow, EditorWindow, LibraryWindow, RevisionRow};
 use slint::{ComponentHandle, Timer};
 use spiderland::{Attached, Child, Children, Fired, Host, Intents, Lifecycle, Never, Slice, Store, Version, callbacks};
@@ -19,7 +20,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 /// The app: one settings store, and the library with its window. The library keeps the documents open and its history pages as
-/// children, each a store of its own.
+/// children, each a store of its own. Every store adds what it runs to one trail.
 pub struct App(Rc<Inner>);
 
 struct Inner {
@@ -27,6 +28,7 @@ struct Inner {
     library: Store<Library>,
     library_window: LibraryWindow,
     documents: Children<DocId, Opened>,
+    trail: Trail,
 }
 
 impl fmt::Debug for App {
@@ -38,7 +40,10 @@ impl fmt::Debug for App {
 impl App {
     /// Builds the app on `service`, with work going to `background`, and shows the library.
     pub fn start(service: Service, background: Background) -> App {
-        let settings = Store::<Settings>::new(settings::Preferences::default(), Quiet);
+        let trail = Trail::default();
+        let wiring = Store::<Settings>::build(settings::Preferences::default(), Quiet);
+        wiring.observe(trail.follow("settings", settings::summary));
+        let settings = wiring.start();
         let library_window = LibraryWindow::new().expect("the library window");
         let documents = Children::default();
         let host = LibraryHost {
@@ -51,16 +56,17 @@ impl App {
         library_window.set_rows(host.rows.model());
         // The library keeps a copy of the preferences. Shared, it gets them as they are now, and each change after.
         let wiring = Store::<Library>::build(library::State::new(settings::Preferences::default()), Windowed::new(&library_window, host));
+        wiring.observe(trail.follow("library", library::status));
         settings.share(&wiring.intents(), |preferences| *preferences, |preferences| library::Intent::Preferences(*preferences));
         // Each history page is a store of its own, with a view in the library's window. Going back drops it.
         wiring.children(&Children::default(), library::pages, {
-            let (service, background, window) = (service.clone(), background.clone(), library_window.clone_strong());
-            move |&id, _| HistoryPage::new(id, &service, &background, &window)
+            let (service, background, window, trail) = (service.clone(), background.clone(), library_window.clone_strong(), trail.clone());
+            move |&id, _| HistoryPage::new(id, &service, &background, &window, &trail)
         });
         // Each document is a store of its own, which tells the library what it says.
         wiring.children(&documents, library::documents, {
-            let settings = settings.clone();
-            move |&id, library| Opened::new(id, &service, &background, &settings, library)
+            let (settings, trail) = (settings.clone(), trail.clone());
+            move |&id, library| Opened::new(id, &service, &background, &settings, library, &trail)
         });
         let library = wiring.start();
         callbacks!(library_window, library.intents(), {
@@ -85,7 +91,13 @@ impl App {
             library,
             library_window,
             documents,
+            trail,
         }))
+    }
+
+    /// What the stores ran, and what changed, as the trail keeps it.
+    pub fn trail(&self) -> &Trail {
+        &self.0.trail
     }
 
     /// The library's window.
@@ -146,8 +158,8 @@ struct Opened {
 }
 
 impl Opened {
-    /// Builds the store of `id`, which takes the settings and tells the library what it says.
-    fn new(id: DocId, service: &Service, background: &Background, settings: &Store<Settings>, library: &Intents<library::Intent>) -> Opened {
+    /// Builds the store of `id`, which takes the settings, tells the library what it says, and adds what it runs to `trail`.
+    fn new(id: DocId, service: &Service, background: &Background, settings: &Store<Settings>, library: &Intents<library::Intent>, trail: &Trail) -> Opened {
         let host = DocumentHost {
             service: service.clone(),
             background: background.clone(),
@@ -158,6 +170,7 @@ impl Opened {
             },
         };
         let wiring = Store::<Document>::build(document::State::new(id, settings::Preferences::default()), host);
+        wiring.observe(trail.follow(format!("document {}", id.0), document::status));
         settings.share(&wiring.intents(), |preferences| *preferences, |preferences| document::Intent::Preferences(*preferences));
         wiring.forward(library, move |output| library::Intent::Document(id, *output));
         Opened {
@@ -289,12 +302,14 @@ struct HistoryPage {
 }
 
 impl HistoryPage {
-    fn new(id: DocId, service: &Service, background: &Background, window: &LibraryWindow) -> HistoryPage {
+    fn new(id: DocId, service: &Service, background: &Background, window: &LibraryWindow, trail: &Trail) -> HistoryPage {
         let host = HistoryHost {
             service: service.clone(),
             background: background.clone(),
         };
-        let store = Store::new(history::State::new(id), host);
+        let wiring = Store::build(history::State::new(id), host);
+        wiring.observe(trail.follow(format!("history {}", id.0), history::title));
+        let store = wiring.start();
         let view = store.attach(Windowed::new(window, HistoryView::default()));
         HistoryPage { store, _view: view }
     }

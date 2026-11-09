@@ -34,7 +34,7 @@ impl State {
 }
 
 /// What comes back, and what the library tells the page.
-#[derive(Debug)]
+#[derive(Debug, strum::IntoStaticStr)]
 pub enum Intent {
     /// The saved states, or why they didn't come.
     Loaded(Result<Vec<Revision>, Error>),
@@ -49,7 +49,7 @@ impl From<Lifecycle> for Intent {
 }
 
 /// Work for the host.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, strum::IntoStaticStr)]
 pub enum Effect {
     /// Loads the saved states.
     Load(DocId),

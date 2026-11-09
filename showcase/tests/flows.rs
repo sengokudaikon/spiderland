@@ -6,6 +6,7 @@ use showcase::history::{self, History};
 use showcase::library::{self, Library, Page};
 use showcase::service::{Doc, DocId, Found, Revision, Summary};
 use showcase::settings::{self, Preferences, Settings};
+use showcase::trail::Trail;
 use spiderland::{Asked, CloseAnswer, Error, Lifecycle, Standing, TestStore};
 
 fn summaries(docs: &[(u32, &str)]) -> Vec<Summary> {
@@ -472,4 +473,53 @@ fn failures_show_in_the_state_and_the_store_goes_on() {
         result: Err(Error::Refused),
     });
     assert_eq!(library.read(library::status), "The search failed: the pool refused background work.");
+}
+
+/// Scenario 14.
+#[test]
+fn the_trail_names_each_step_and_each_change_to_what_a_store_shows() {
+    let trail = Trail::default();
+    let library = started_library();
+    library.store().observe(trail.follow("library", library::status));
+    library.send(library::Intent::Typed("beta".into()));
+    let (asked, ..) = search(&library);
+    library.send(library::Intent::Select(DocId(2)));
+    library.send(library::Intent::Found {
+        asked,
+        result: Err(Error::Refused),
+    });
+    assert_eq!(
+        trail.lines(),
+        [
+            "library Typed",
+            "library: Searching",
+            "library does Search",
+            "library Select",
+            "library Found",
+            "library: The search failed: the pool refused background work.",
+        ],
+        "a step that changes nothing shown is there by its name alone"
+    );
+
+    let trail = Trail::default();
+    let doc = loaded("Alpha", "a");
+    doc.store().observe(trail.follow("document 1", document::status));
+    doc.send(document::Intent::EditBody("b".into()));
+    doc.send(document::Intent::Save);
+    doc.take_effects();
+    doc.send(document::Intent::Saved(Ok(Ok(2))));
+    assert_eq!(
+        trail.lines(),
+        [
+            "document 1 EditBody",
+            "document 1: Edited",
+            "document 1 Save",
+            "document 1: Saving",
+            "document 1 does Save",
+            "document 1 Saved",
+            "document 1: Revision 2",
+            "document 1 says Changed",
+        ],
+        "what a store tells others is there too"
+    );
 }

@@ -101,7 +101,8 @@
 //! says how far it has got, goes through [`Background::stoppable`]. [`Latest`] and [`OneAtATime`] are plain data for a reducer
 //! with work in flight: which answer still counts, and what waits its turn.
 //!
-//! [`Store::observe`] shows each intent and effect as a store runs it, so an app can keep a trail of what led to a fault.
+//! [`Store::observe`] shows each step as a store runs it: each intent and the state after it, each effect and each output. An app
+//! can keep a trail of what led to a fault, and what changed on the way.
 //!
 //! What this leaves out on purpose:
 //! - **Outside state as a separate input.** A worker's snapshot reaches a feature as an intent and is kept in its state, so

@@ -76,7 +76,7 @@ impl State {
 }
 
 /// What the user asks, and what comes back.
-#[derive(Debug)]
+#[derive(Debug, strum::IntoStaticStr)]
 pub enum Intent {
     /// The search box changed.
     Typed(String),
@@ -110,7 +110,7 @@ pub enum Intent {
 }
 
 /// Work for the host.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, strum::IntoStaticStr)]
 pub enum Effect {
     /// One page of a search.
     Search {

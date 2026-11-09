@@ -95,12 +95,19 @@ fn what_a_store_does_as_it_starts_is_heard_when_it_is_wired_first() {
     wiring.observe(move |seen| {
         seeing.borrow_mut().push(match seen {
             Seen::Intent(set) => format!("{set:?}"),
+            Seen::State(values) => format!("size {}", values.size),
             Seen::Effect(()) => "write".to_owned(),
+            Seen::Output(set) => format!("said {set:?}"),
+            _ => return,
         })
     });
     let _settings = wiring.start();
     assert_eq!(*heard.borrow(), [Set::Saved], "the answer to the write `start` asked for");
-    assert_eq!(*seen.borrow(), ["write", "Saved"], "the observer saw the start's effect too");
+    assert_eq!(
+        *seen.borrow(),
+        ["size 0", "write", "Saved", "size 0", "said Saved"],
+        "the observer saw the start's state and effect too"
+    );
 
     let (late, late_heard) = new_page();
     let settings = Store::<Settings>::new(Values::default(), AtOnce);

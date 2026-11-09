@@ -78,14 +78,18 @@ tag makes a GitHub release from that version's section.
   are each a shape of keys in the state. A child dropped stops what it runs, and an answer for it goes nowhere. `Child::tell`
   says how a child hears its lifecycle, and a `Store` whose intent is `From<Lifecycle>` has it.
 - `spiderland`: `Store::downgrade` and `WeakStore`, to hold a store without keeping it alive.
+- `spiderland`: `Seen::State`, the state just after each intent is reduced and as a store wired on a `Wiring` starts, and
+  `Seen::Output`, each output just before it is heard. So a trail can record what each intent changed, and what a store told
+  others. `&Never` converts into `&'static str`, so a trail that names its steps that way covers a feature with no effects or
+  no outputs.
 - `spiderland-slint`: `testing::Headless::separate_windows`, after which each component made gets a window of its own, and
   `Headless::on`, whose `testing::Input` sends real input to one window. `Input::close` asks a window to close, as its title
   bar's button does. Until `separate_windows`, every component shows in `Headless::window`, as before.
-- `showcase`: a small document library built on both crates, as their example and the test of what they can do. Thirteen
+- `showcase`: a small document library built on both crates, as their example and the test of what they can do. Fourteen
   scenarios run through its stores: a search whose late answers are dropped, paging, a selection that follows its document,
   a form that refuses an edit, saves one at a time, an export with progress that stops, a delete that asks first, a history
   page, settings shared by every window, a second window on one document, a close that asks first, failures that show in
-  the state, and closing the library, which waits for every document's saves. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
+  the state, closing the library, which waits for every document's saves, and a trail of what each store ran. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
   the app has to write by hand is marked `Workaround:` in its code. `mise run showcase` runs it on the desktop.
 
 ### Changed
@@ -116,6 +120,8 @@ tag makes a GitHub release from that version's section.
   `Closing::asking(0..n)`, and have each child's answer carry its index to `hear(child, answer)`. `Closing` is no longer `Copy`.
 - **Breaking:** `Lifecycle` has `CloseCalledOff`, for a parent to tell its children that the window stays after it asked to
   close, so a child that stopped something to close starts it again. A `match` on `Lifecycle` needs an arm for it.
+- **Breaking:** `Seen` is `#[non_exhaustive]`, and has `State` and `Output` as well as `Intent` and `Effect`. A `match` on it
+  ends with a `_` arm. An `if let` needs no change. Its `Debug` asks the state and the output to be `Debug` too.
 
 ### Removed
 

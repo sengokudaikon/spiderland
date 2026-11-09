@@ -378,7 +378,7 @@ fn a_change_made_elsewhere_reloads(headless: &Headless) {
     until("the reload", || editor.get_body_shown() == "changed elsewhere");
 }
 
-/// Scenario 12.
+/// Scenarios 12 and 14.
 fn failures_show_and_the_app_goes_on(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
@@ -397,6 +397,10 @@ fn failures_show_and_the_app_goes_on(headless: &Headless) {
     input.click(EXPORT, EDITOR_BUTTONS);
     scene.idle();
     assert_eq!(editor.get_status().trim(), "The export failed: background work panicked.");
+    // Scenario 14: the trail names the steps that led to the failure, and what the editor showed after.
+    let trail = scene.app.trail().lines();
+    let last = ["document 2 Export", "document 2 Exporting", "document 2: The export failed: background work panicked."];
+    assert!(trail.ends_with(&last.map(String::from)), "{trail:#?}");
 
     scene.service.fail_next_save("the disk is full");
     input.click(390.0, 40.0);

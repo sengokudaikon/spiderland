@@ -18,7 +18,7 @@
 | `Store::connect`, `Connection` | Forwards until the returned `Connection` is dropped, for a connection between stores that both go on. |
 | `Store::share` | Sends a projection of the state to another store now, and again whenever it changes, so a store built later starts current. |
 | `Store::build`, `Wiring` | Builds a store without starting it, so listeners and observers wired on it hear its start too. `Wiring::start` starts it. |
-| `Store::observe`, `Seen` | Shows each intent and effect as the store runs it, for a trail of what led to a fault. |
+| `Store::observe`, `Seen` | Shows each step as the store runs it: each intent, the state after it, each effect and each output. For a trail of what led to a fault, and what changed on the way. |
 | `Lifecycle`, `CloseAnswer`, `Closing` | Let a parent show and hide its children, ask whether they can close, and tell them when the window stays after all. |
 | `Children`, `Store::children`, `Wiring::children` | Child stores a parent keeps, one for each key its state names: a stack of pages, a slot, or a set of documents. Each is built as its key appears and dropped once it goes, so an answer for a page closed goes nowhere. |
 | `Standing`, `Child` | Where the parent's state puts each child: shown, hidden or asked to close. Each change reaches the child as a `Lifecycle` event, through `Child::tell`, which a store whose intent is `From<Lifecycle>` has. |

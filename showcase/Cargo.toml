@@ -12,6 +12,8 @@ spiderland-slint = { path = "../spiderland-slint" }
 slint.workspace = true
 # Channels only, for the service's watch.
 tokio.workspace = true
+# Names for each intent, effect and output on the trail. Rust has none of its own for an enum's variant.
+strum = { version = "0.28", features = ["derive"] }
 
 [dev-dependencies]
 spiderland = { workspace = true, features = ["testing"] }

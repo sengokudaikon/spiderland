@@ -6,6 +6,7 @@
 //! - [`settings`], [`library`], [`history`] and [`document`]: the features, each pure, each tested with no window. The library
 //!   keeps each document open and each [`history`] page as a child store. A document runs an [`export`] inside its store, as a
 //!   feature of its own.
+//! - [`trail`]: what the stores ran, by name, and what changed, for a fault report.
 //! - [`view`]: the windows, in Slint's language.
 //! - [`app`]: the hosts, and the app that builds the stores and windows and connects them.
 //!
@@ -27,6 +28,7 @@
 //! | 11. A document changed outside the app reloads through a watch | yes | yes |
 //! | 12. A failed job and a panicking one each show in the state, and the store goes on | yes | yes |
 //! | 13. Closing the library closes the app once every document has closed, and waits for a save under way | yes | yes |
+//! | 14. A trail of what each store ran, by name, and each change to what it shows, which names the steps before a failure | yes | yes |
 //!
 //! Where the app writes by hand what the framework doesn't yet do, the code says `Workaround:` and names what is missing. No such
 //! place is left.
@@ -41,6 +43,7 @@ pub mod library;
 pub mod pool;
 pub mod service;
 pub mod settings;
+pub mod trail;
 pub mod view;
 
 /// Documents to start with: a title and a body each.

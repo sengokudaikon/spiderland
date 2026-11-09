@@ -125,7 +125,7 @@ impl State {
 }
 
 /// What the user asks, and what comes back.
-#[derive(Debug)]
+#[derive(Debug, strum::IntoStaticStr)]
 pub enum Intent {
     /// The document, or why it didn't load.
     Loaded(Result<Result<crate::service::Doc, String>, Error>),
@@ -160,7 +160,7 @@ pub enum Intent {
 }
 
 /// Work for the host.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, strum::IntoStaticStr)]
 pub enum Effect {
     /// Loads the document.
     Load(DocId),
@@ -171,7 +171,7 @@ pub enum Effect {
 }
 
 /// What the document tells others.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
 pub enum Output {
     /// It was saved or deleted, so lists of documents may be stale.
     Changed,
