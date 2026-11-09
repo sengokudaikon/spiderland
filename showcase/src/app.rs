@@ -7,9 +7,9 @@ use crate::library::{self, Library, Page};
 use crate::service::{DocId, EXPORT_STEPS, Service};
 use crate::settings::{self, Settings};
 use crate::view::{DocRow, EditorWindow, LibraryWindow, RevisionRow};
-use slint::{CloseRequestResponse, ComponentHandle, Timer};
-use spiderland::{Host, Intents, Lifecycle, Slice, Store, Version, callbacks};
-use spiderland_slint::{Background, Rows, WindowHost, Windowed, on_watch};
+use slint::{ComponentHandle, Timer};
+use spiderland::{Attached, Fired, Host, Intents, Lifecycle, Slice, Store, Version, callbacks};
+use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, ask_before_closing, on_watch};
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -35,8 +35,8 @@ struct Opened {
     windows: Windows,
 }
 
-/// The windows on one document. The app owns them, and their host paints them all.
-type Windows = Rc<RefCell<Vec<EditorWindow>>>;
+/// The windows on one document, each with its view attached to the document's store.
+type Windows = Rc<RefCell<Vec<(EditorWindow, Attached)>>>;
 
 impl fmt::Debug for App {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -124,14 +124,21 @@ impl App {
             .documents
             .borrow()
             .get(&id)
-            .map(|opened| opened.windows.borrow().iter().map(ComponentHandle::clone_strong).collect())
+            .map(|opened| {
+                let windows = opened.windows.borrow();
+                windows
+                    .iter()
+                    .filter(|(window, _)| window.window().is_visible())
+                    .map(|(window, _)| window.clone_strong())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     /// Hides every window, so the app can be dropped.
     pub fn close(&self) {
         for opened in self.0.documents.borrow().values() {
-            for window in opened.windows.borrow().iter() {
+            for (window, _) in opened.windows.borrow().iter() {
                 let _ = window.hide();
             }
         }
@@ -143,20 +150,16 @@ fn open(inner: &Inner, id: DocId) -> EditorWindow {
     let window = EditorWindow::new().expect("an editor window");
     let mut documents = inner.documents.borrow_mut();
     documents.retain(|_, opened| opened.store.try_read(|state| !state.deleted).unwrap_or(true));
+    // A view counts as gone while its window is hidden, so the window shows before its view attaches.
+    window.show().expect("show an editor");
     if let Some(opened) = documents.get(&id) {
-        // Workaround: no view that attaches to a live store. A window that comes later is painted here from the state, as no
-        // render is due, and is handed the toast as seen, so an old one doesn't show again.
-        opened.store.try_read(|state| {
-            window.set_toast_seen(state.toast.serial());
-            paint(&window, state);
-        });
-        connect(&window, &opened.store.intents(), &opened.windows);
-        opened.windows.borrow_mut().push(window.clone_strong());
+        // The windows closed before go now. The document stays, with any save under way.
+        let hidden: Vec<_> = opened.windows.borrow_mut().extract_if(.., |(window, _)| !window.window().is_visible()).collect();
+        let_go(hidden);
+        show(&window, &opened.store, &opened.windows);
     } else {
-        let windows: Windows = Rc::new(RefCell::new(vec![window.clone_strong()]));
         let host = DocumentHost {
             id,
-            windows: windows.clone(),
             service: inner.service.clone(),
             background: inner.background.clone(),
         };
@@ -168,15 +171,18 @@ fn open(inner: &Inner, id: DocId) -> EditorWindow {
             (*output == document::Output::Changed).then_some(library::Intent::Changed)
         });
         let store = wiring.start();
-        connect(&window, &store.intents(), &windows);
+        let windows = Windows::default();
+        show(&window, &store, &windows);
         documents.insert(id, Opened { store, windows });
     }
-    window.show().expect("show an editor");
     window
 }
 
-/// Sends what the user does in `window` to the document.
-fn connect(window: &EditorWindow, intents: &Intents<document::Intent>, windows: &Windows) {
+/// Attaches a view in `window` to the document, which it shows at once, and sends what the user does there to the document.
+fn show(window: &EditorWindow, store: &Store<Document>, windows: &Windows) {
+    let attached = store.attach(Windowed::new(window, EditorView::default()));
+    windows.borrow_mut().push((window.clone_strong(), attached));
+    let intents = store.intents();
     callbacks!(window, intents, {
         on_title_edited: |title| document::Intent::EditTitle(title.into()),
         on_body_edited: |body| document::Intent::EditBody(body.into()),
@@ -190,32 +196,17 @@ fn connect(window: &EditorWindow, intents: &Intents<document::Intent>, windows: 
             _ => Choice::Cancel,
         }),
     });
-    // Workaround: no Slint helper for closing, so the close request is answered here by hand. And with no views that attach and
-    // leave, which window may simply go, because another still shows the document, is the app's to know.
-    let (this, windows, intents) = (window.as_weak(), Rc::downgrade(windows), intents.clone());
-    window.window().on_close_requested(move || {
-        let Some(windows) = windows.upgrade() else {
-            return CloseRequestResponse::HideWindow;
-        };
-        let others = windows.borrow().len() > 1;
-        if others {
-            let mut windows = windows.borrow_mut();
-            if let Some(at) = windows
-                .iter()
-                .position(|window| this.upgrade().is_some_and(|this| std::ptr::eq(window.window(), this.window())))
-            {
-                let_go(vec![windows.remove(at)]);
-            }
-            return CloseRequestResponse::HideWindow;
-        }
-        intents.send(document::Intent::Life(Lifecycle::CloseRequested));
-        CloseRequestResponse::KeepWindowShown
-    });
+    // One of several windows simply goes, and the document stays with the others. The last one asks the document, which may ask
+    // about unsaved edits first.
+    let asking = store.clone();
+    ask_before_closing(window, &intents, move || (asking.views() == 1).then_some(document::Intent::Life(Lifecycle::CloseRequested)));
 }
 
 /// Drops windows on the next turn of the event loop, as one of them may be running the callback that let them go.
-fn let_go(windows: Vec<EditorWindow>) {
-    Timer::single_shot(Duration::ZERO, move || drop(windows));
+fn let_go(windows: Vec<(EditorWindow, Attached)>) {
+    if !windows.is_empty() {
+        Timer::single_shot(Duration::ZERO, move || drop(windows));
+    }
 }
 
 /// Hosts nothing: for the settings, whose state the others copy.
@@ -296,21 +287,14 @@ impl WindowHost<Library> for LibraryHost {
     }
 }
 
-/// Workaround: a store has one host, and a host one view. So this host paints every window on its document itself.
+/// Runs a document's effects. Its windows are views attached to the store, so it shows nothing itself.
 struct DocumentHost {
     id: DocId,
-    windows: Windows,
     service: Service,
     background: Background,
 }
 
 impl Host<Document> for DocumentHost {
-    fn render(&mut self, state: &document::State, _: &Intents<document::Intent>) {
-        for window in self.windows.borrow().iter() {
-            paint(window, state);
-        }
-    }
-
     fn perform(&mut self, effect: document::Effect, intents: &Intents<document::Intent>) {
         let service = self.service.clone();
         match effect {
@@ -320,13 +304,6 @@ impl Host<Document> for DocumentHost {
                     .run(intents, move || service.save(id, &content.title, &content.body), document::Intent::Saved);
             }
             document::Effect::Delete(id) => self.background.run(intents, move || service.delete(id), document::Intent::Deleted),
-            document::Effect::Hide => {
-                let windows: Vec<EditorWindow> = self.windows.borrow_mut().drain(..).collect();
-                for window in &windows {
-                    let _ = window.hide();
-                }
-                let_go(windows);
-            }
         }
     }
 
@@ -359,17 +336,38 @@ impl Host<Document> for DocumentHost {
     }
 }
 
+/// One window on a document. Each counts the document's pulses from when it attached, so a window opened later acts only on what
+/// fires after that.
+#[derive(Default)]
+struct EditorView {
+    refused: Fired,
+    toast: Fired,
+    close: Fired,
+}
+
+impl WindowView<Document> for EditorView {
+    type Window = EditorWindow;
+
+    fn render(&mut self, window: &EditorWindow, state: &document::State, _: &Intents<document::Intent>) {
+        if self.close.serial(&state.close) > 0 {
+            let _ = window.hide();
+            return;
+        }
+        paint(window, state, self);
+    }
+}
+
 /// Shows `state` in one window.
-fn paint(window: &EditorWindow, state: &document::State) {
+fn paint(window: &EditorWindow, state: &document::State, view: &mut EditorView) {
     window.set_doc_title(state.content.title.as_str().into());
-    window.set_title_refused(state.refused.serial());
+    window.set_title_refused(view.refused.serial(&state.refused));
     window.set_body(state.content.body.as_str().into());
     window.set_status(document::status(state).into());
     window.set_problem(state.problem().unwrap_or_default().into());
     window.set_word_count_shown(state.preferences.word_count);
     window.set_words(state.words() as i32);
     window.set_toast_text(state.toast.value().as_str().into());
-    window.set_toast(state.toast.serial());
+    window.set_toast(view.toast.serial(&state.toast));
     window.set_asking(
         match state.asking {
             None => "",

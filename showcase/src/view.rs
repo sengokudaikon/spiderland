@@ -290,19 +290,15 @@ slint::slint! {
             text: "Exporting " + root.export-done + " of " + root.export-of;
         }
 
-        // A toast shows when its pulse moves past what this window has already seen. Workaround: a pulse plays again on a window
-        // that attaches to a store that fired it, so a window opened on a document that toasted before is handed the pulse as
-        // seen.
+        // A toast shows each time its pulse moves. The window's view counts the pulse from when it attached, so a window opened
+        // on a document that toasted before doesn't show that toast.
         in property <string> toast-text;
         in property <int> toast;
-        in property <int> toast-seen;
         out property <int> toasts-shown;
         out property <string> toast-showing;
         changed toast => {
-            if (toast > toast-seen) {
-                toasts-shown += 1;
-                toast-showing = toast-text;
-            }
+            toasts-shown += 1;
+            toast-showing = toast-text;
         }
 
         // "" for none, "delete" or "close".

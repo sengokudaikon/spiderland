@@ -240,7 +240,8 @@ fn a_save_under_way_finishes_after_its_window_closes() {
     doc.send(document::Intent::Save);
     assert_eq!(doc.take_effects().len(), 1);
     doc.send(document::Intent::Life(Lifecycle::CloseRequested));
-    assert_eq!(doc.take_effects(), [document::Effect::Hide], "nothing is unsaved, so the window goes at once");
+    assert!(doc.take_effects().is_empty());
+    assert_eq!(doc.read(|state| state.close.serial()), 1, "nothing is unsaved, so the window goes at once");
     assert_eq!(doc.take_outputs(), [document::Output::Closed(CloseAnswer::Closed)]);
 
     doc.send(document::Intent::Saved(Ok(Ok(2))));
@@ -280,7 +281,7 @@ fn a_delete_asks_first() {
     doc.send(document::Intent::Answer(Choice::Confirm));
     assert_eq!(doc.take_effects(), [document::Effect::Delete(DocId(1))]);
     doc.send(document::Intent::Deleted(Ok(Ok(()))));
-    assert_eq!(doc.take_effects(), [document::Effect::Hide]);
+    assert_eq!(doc.read(|state| state.close.serial()), 1, "its windows close");
     assert_eq!(doc.take_outputs(), [document::Output::Changed]);
     assert!(!doc.is_running(&Running::Watching), "a deleted document stops watching for changes");
 }
@@ -300,13 +301,13 @@ fn closing_with_edits_asks_and_goes_once_they_are_saved_or_dropped() {
     doc.send(document::Intent::Answer(Choice::Confirm));
     assert_eq!(doc.take_effects(), [document::Effect::Save(DocId(1), content("Alpha", "b"))]);
     doc.send(document::Intent::Saved(Ok(Ok(2))));
-    assert_eq!(doc.take_effects(), [document::Effect::Hide], "it closes once the save is in");
+    assert_eq!(doc.read(|state| state.close.serial()), 1, "it closes once the save is in");
     assert_eq!(doc.take_outputs(), [document::Output::Changed, document::Output::Closed(CloseAnswer::Closed)]);
 
     doc.send(document::Intent::EditBody("c".into()));
     doc.send(document::Intent::Life(Lifecycle::CloseRequested));
     doc.send(document::Intent::Answer(Choice::Discard));
-    assert_eq!(doc.take_effects(), [document::Effect::Hide]);
+    assert_eq!(doc.read(|state| state.close.serial()), 2);
     assert_eq!(doc.read(|state| state.content.clone()), content("Alpha", "b"), "the edits were dropped");
     assert_eq!(doc.take_outputs(), [document::Output::Closed(CloseAnswer::Closed)]);
 }

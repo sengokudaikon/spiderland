@@ -71,6 +71,8 @@ pub struct State {
     pub refused: Pulse,
     /// A short note for the user, such as "Saved".
     pub toast: Pulse<String>,
+    /// Fires when the document's windows close: it was closed, or deleted. A window opened after that doesn't act on it.
+    pub close: Pulse,
     /// Why the last save, export or delete failed.
     pub error: Option<String>,
     /// The export under way.
@@ -98,6 +100,7 @@ impl State {
             saves: OneAtATime::default(),
             refused: Pulse::default(),
             toast: Pulse::new(String::new()),
+            close: Pulse::default(),
             error: None,
             export: None,
             asking: None,
@@ -167,8 +170,6 @@ pub enum Effect {
     Save(DocId, Content),
     /// Deletes the document.
     Delete(DocId),
-    /// Hides every window on the document.
-    Hide,
 }
 
 /// What the document tells others.
@@ -244,7 +245,7 @@ impl Feature for Document {
             Intent::Answer(choice) => answer(state, choice, effects),
             Intent::Deleted(Ok(Ok(()))) => {
                 state.deleted = true;
-                effects.push(Effect::Hide);
+                state.close.fire(());
                 effects.emit(Output::Changed);
             }
             Intent::Deleted(Ok(Err(why))) => state.error = Some(why),
@@ -254,7 +255,7 @@ impl Feature for Document {
                     state.asking = Some(Ask::Close);
                 } else {
                     // A save under way goes on without a window, and its outcome is kept here.
-                    close(effects);
+                    close(state, effects);
                 }
             }
             Intent::Life(Lifecycle::Shown | Lifecycle::Hidden | Lifecycle::CloseCalledOff) => {}
@@ -304,7 +305,7 @@ fn saved(state: &mut State, result: Result<Result<u32, String>, Error>, effects:
             }
             if state.closing && !state.saves.is_running() {
                 state.closing = false;
-                close(effects);
+                close(state, effects);
             }
         }
         Ok(Err(why)) => failed(state, why, next, effects),
@@ -340,14 +341,14 @@ fn answer(state: &mut State, choice: Choice, effects: &mut Effects<Effect, Outpu
         }
         (Ask::Close, Choice::Discard) => {
             state.content = state.saved.clone();
-            close(effects);
+            close(state, effects);
         }
         (Ask::Close, Choice::Cancel) => effects.emit(Output::Closed(CloseAnswer::StayingOpen)),
     }
 }
 
-fn close(effects: &mut Effects<Effect, Output>) {
-    effects.push(Effect::Hide);
+fn close(state: &mut State, effects: &mut Effects<Effect, Output>) {
+    state.close.fire(());
     effects.emit(Output::Closed(CloseAnswer::Closed));
 }
 
