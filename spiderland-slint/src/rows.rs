@@ -1,6 +1,7 @@
 //! A list model updated in place.
 
 use slint::{Model, ModelRc, VecModel};
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::Hash;
@@ -109,14 +110,23 @@ impl<T: Clone + PartialEq + 'static> Rows<T> {
     }
 }
 
-/// One list inside each row of a [`Rows`], by position. Each row keeps one model for as long as its position exists, so an inner
-/// change reaches the view without the outer row counting as changed, and without losing the change to the Slint bug described on
-/// [`Rows`]. Under an outer list that moves rows, a row gets the model of the position it lands on, with the right contents.
-pub struct InnerRows<T: 'static>(Vec<Rows<T>>);
+/// One list inside each row of a [`Rows`]. Each row keeps one model, so an inner change reaches the view without the outer row
+/// counting as changed, and without losing the change to the Slint bug described on [`Rows`].
+///
+/// [`InnerRows::fill`] keeps a model per position, for an outer [`Rows::sync`]. [`InnerRows::fill_by`] keeps one per key, for an
+/// outer [`Rows::sync_by`]: a row that stays keeps its model as rows before it come or go, so the outer row doesn't count as
+/// changed, and focus inside its list stays. Use the same key for both.
+pub struct InnerRows<T: 'static>(Vec<Inner<T>>);
+
+/// One row's model, and the key it was kept for, if it was filled by key.
+struct Inner<T: 'static> {
+    key: Option<Box<dyn Any>>,
+    rows: Rows<T>,
+}
 
 impl<T: Clone + 'static> fmt::Debug for InnerRows<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("InnerRows").field(&self.0).finish()
+        f.debug_list().entries(self.0.iter().map(|inner| &inner.rows)).finish()
     }
 }
 
@@ -128,21 +138,56 @@ impl<T: 'static> Default for InnerRows<T> {
 
 impl<T: Clone + PartialEq + 'static> InnerRows<T> {
     /// Takes each row with its inner list, updates that list's model in place, and hands the model to `attach` to put in the row. It
-    /// returns the rows, for the outer [`Rows`] to sync. Models past the last row are let go of.
+    /// returns the rows, for the outer [`Rows::sync`]. Each position keeps its model, and models past the last row are let go of.
+    /// Under an outer list that moves rows, a row gets the model of the position it lands on, with the right contents.
     pub fn fill<R, L: IntoIterator<Item = T>>(&mut self, rows: impl IntoIterator<Item = (R, L)>, attach: impl Fn(&mut R, ModelRc<T>)) -> Vec<R> {
         let mut filled = Vec::new();
         for (index, (mut row, list)) in rows.into_iter().enumerate() {
             if index == self.0.len() {
-                self.0.push(Rows::default());
+                self.0.push(Inner { key: None, rows: Rows::default() });
             }
-            if self.0[index].update(list) {
-                self.0[index].refresh();
-            }
-            attach(&mut row, self.0[index].model());
+            self.0[index].key = None;
+            attach(&mut row, self.0[index].update(list));
             filled.push(row);
         }
         self.0.truncate(filled.len());
         filled
+    }
+
+    /// [`InnerRows::fill`], keeping a model for each row's `key` rather than its position. It returns the rows, for the outer
+    /// [`Rows::sync_by`] with the same key. A row whose key stays keeps its model wherever it moves, and a key that goes takes its
+    /// model with it. Keys should be unique: of rows sharing a key, the first gets the model kept.
+    pub fn fill_by<K: PartialEq + 'static, R, L: IntoIterator<Item = T>>(
+        &mut self,
+        key: impl Fn(&R) -> K,
+        rows: impl IntoIterator<Item = (R, L)>,
+        attach: impl Fn(&mut R, ModelRc<T>),
+    ) -> Vec<R> {
+        let mut kept = std::mem::take(&mut self.0);
+        let mut filled = Vec::new();
+        for (mut row, list) in rows {
+            let row_key = key(&row);
+            let found = kept.iter().position(|inner| inner.key.as_ref().and_then(|key| key.downcast_ref::<K>()) == Some(&row_key));
+            let mut inner = match found {
+                Some(at) => kept.remove(at),
+                None => Inner { key: None, rows: Rows::default() },
+            };
+            inner.key = Some(Box::new(row_key));
+            attach(&mut row, inner.update(list));
+            self.0.push(inner);
+            filled.push(row);
+        }
+        filled
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> Inner<T> {
+    /// Updates the model to `list`, gets a change in place onto the screen, and returns the model.
+    fn update(&self, list: impl IntoIterator<Item = T>) -> ModelRc<T> {
+        if self.rows.update(list) {
+            self.rows.refresh();
+        }
+        self.rows.model()
     }
 }
 
@@ -206,5 +251,35 @@ mod tests {
         let regrown = fill(&mut inner, vec![vec![6], vec![7]]);
         assert!(regrown[1] != second[1], "a position that went away starts over");
         assert!(regrown[0] == second[0]);
+    }
+
+    /// A row with a key and a list of its own, as a view gets it.
+    #[derive(Clone, PartialEq)]
+    struct Row {
+        id: u32,
+        items: Option<ModelRc<i32>>,
+    }
+
+    /// Fills `inner` by key and syncs `outer` by the same key, from `(id, items)` pairs.
+    fn show(outer: &Rows<Row>, inner: &mut InnerRows<i32>, rows: &[(u32, &[i32])]) {
+        let rows = rows.iter().map(|&(id, items)| (Row { id, items: None }, items.to_vec()));
+        outer.sync_by(|row| row.id, inner.fill_by(|row: &Row| row.id, rows, |row, model| row.items = Some(model)));
+    }
+
+    #[test]
+    fn inner_rows_by_key_keep_a_rows_model_as_rows_before_it_come_or_go() {
+        let (outer, mut inner) = (Rows::default(), InnerRows::default());
+        show(&outer, &mut inner, &[(1, &[10]), (2, &[20, 21])]);
+        let second = outer.model().row_data(1).unwrap();
+        show(&outer, &mut inner, &[(2, &[20, 22])]);
+        let kept = outer.model().row_data(0).unwrap();
+        assert!(kept.items == second.items, "the row that stayed kept its model, so the outer row is unchanged");
+        assert_eq!(kept.items.unwrap().iter().collect::<Vec<_>>(), [20, 22], "with the new contents");
+
+        show(&outer, &mut inner, &[(3, &[30]), (2, &[20])]);
+        assert!(outer.model().row_data(1).unwrap().items == second.items, "and as rows come before it");
+        show(&outer, &mut inner, &[(3, &[30])]);
+        show(&outer, &mut inner, &[(3, &[30]), (2, &[20])]);
+        assert!(outer.model().row_data(1).unwrap().items != second.items, "a key that went away starts over");
     }
 }

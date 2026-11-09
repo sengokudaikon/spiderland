@@ -68,5 +68,5 @@
 | `after` | Sends an intent once after a delay. Keep the timer in one place and it debounces. |
 | `Rows` | A list model updated row by row, so a row being dragged or typed in survives its neighbours' changes. |
 | `Rows::sync_by` | Matches rows by key, so a row's focus follows its item when rows before it come or go. |
-| `InnerRows` | Keeps a list inside each row, with one stable model per row, and works around a Slint bug that can lose its changes. |
+| `InnerRows` | Keeps a list inside each row, with one stable model per row, and works around a Slint bug that can lose its changes. `fill` keeps a model per position, and `fill_by` one per key, for an outer `Rows::sync_by`. |
 | `testing` | The real window with no display, driven by real input. Behind the `testing` feature. |

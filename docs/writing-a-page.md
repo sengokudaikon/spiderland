@@ -129,9 +129,12 @@ render that caused it.
 
 **Lists inside rows**
 
-Use `rows.sync(inner.fill(…))`. A plain `Rows` in a row can lose a change: in Slint 1.18.1, while the outer row has an update not yet
-painted, an inner item changed in place stays old on screen. Two renders with no paint between them are enough. `InnerRows` gets
-the change onto the screen.
+Use `rows.sync(inner.fill(…))`, or `rows.sync_by(key, inner.fill_by(key, …))` with the same key. A plain `Rows` in a row can lose a
+change: in Slint 1.18.1, while the outer row has an update not yet painted, an inner item changed in place stays old on screen. Two
+renders with no paint between them are enough. `InnerRows` gets the change onto the screen.
+
+Under `sync_by`, fill by key too. `fill` keeps a model per position, so when a row before it goes, a row that stays gets another
+row's model: its list is built again, and focus inside it is lost. `fill_by` keeps each row's model with its key.
 
 **A child feature inside a page**
 

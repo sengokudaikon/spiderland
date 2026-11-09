@@ -21,6 +21,11 @@ slint::slint! {
         cells: [bool],
     }
 
+    export struct ListRow {
+        id: int,
+        items: [string],
+    }
+
     export component View inherits Window {
         width: 400px;
         height: 400px;
@@ -95,6 +100,23 @@ slint::slint! {
                 background: cell ? #ff0000 : #0000ff;
                 init => {
                     root.cells-built += 1;
+                }
+            }
+        }
+
+        in property <[ListRow]> lists;
+        callback item-edited(int, string);
+        for row[index] in lists: Rectangle {
+            x: 0;
+            y: 300px + index * 20px;
+            width: 400px;
+            height: 20px;
+            for item[position] in row.items: TextInput {
+                x: position * 100px;
+                width: 100px;
+                text: item;
+                edited => {
+                    root.item-edited(row.id, self.text);
                 }
             }
         }
@@ -323,4 +345,39 @@ fn state_flows_through_a_real_view() {
     assert_eq!([drawn(&view, 0, 0), drawn(&view, 0, 1)], [LIT, LIT], "both show");
     assert_eq!(view.get_cells_built(), built, "the inner rows were refreshed in place");
     assert_eq!(grid.model().row_data(0).unwrap().cells.row_count(), 2, "and the list is as long as it was");
+
+    // Inner rows by key: removing an earlier row leaves a row's inner model with it, and the focus inside its list with the item.
+    let typed: Rc<RefCell<Vec<(i32, SharedString)>>> = Rc::default();
+    let hearing = Rc::clone(&typed);
+    view.on_item_edited(move |id, text| hearing.borrow_mut().push((id, text)));
+    let list = |id: i32, item: &str| (ListRow { id, items: ModelRc::default() }, [SharedString::from(item)]);
+    let attach = |row: &mut ListRow, items| row.items = items;
+    let lists = Rows::<ListRow>::default();
+    let mut inner = InnerRows::default();
+    view.set_lists(lists.model());
+    lists.sync_by(|row| row.id, inner.fill_by(|row: &ListRow| row.id, [list(1, "a"), list(2, "b")], attach));
+    settle();
+    headless.click(5.0, 330.0);
+    headless.type_text("x");
+    assert_eq!(typed.borrow().last().unwrap().0, 2, "the click reached the second row's list");
+    lists.sync_by(|row| row.id, inner.fill_by(|row: &ListRow| row.id, [list(2, "b")], attach));
+    settle();
+    headless.type_text("y");
+    let (id, text) = typed.borrow().last().unwrap().clone();
+    assert_eq!((id, text.as_str()), (2, "bxy"), "the focus stayed inside the row's list, and so did what was typed");
+
+    // By position, the row that stays gets the first position's model, so its list is built again and the focus goes.
+    typed.borrow_mut().clear();
+    let lists = Rows::<ListRow>::default();
+    let mut inner = InnerRows::default();
+    view.set_lists(lists.model());
+    lists.sync_by(|row| row.id, inner.fill([list(1, "a"), list(2, "b")], attach));
+    settle();
+    headless.click(5.0, 330.0);
+    headless.type_text("x");
+    assert_eq!(typed.borrow().last().unwrap().0, 2);
+    lists.sync_by(|row| row.id, inner.fill([list(2, "b")], attach));
+    settle();
+    headless.type_text("y");
+    assert!(typed.borrow().iter().all(|(_, text)| !text.contains('y')), "the focus was lost: {:?}", typed.borrow());
 }

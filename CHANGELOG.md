@@ -78,6 +78,8 @@ tag makes a GitHub release from that version's section.
   are each a shape of keys in the state. A child dropped stops what it runs, and an answer for it goes nowhere. `Child::tell`
   says how a child hears its lifecycle, and a `Store` whose intent is `From<Lifecycle>` has it.
 - `spiderland`: `Store::downgrade` and `WeakStore`, to hold a store without keeping it alive.
+- `spiderland-slint`: `InnerRows::fill_by`, which keeps each row's inner model by key, for an outer `Rows::sync_by`. A row that
+  stays keeps its model as rows before it come or go, so its list isn't built again and focus inside it stays.
 - `spiderland`: `Saved`, `Store::save_in` and `Wiring::save_in`, so each store saves its part of the session under a key, in a
   form the app picks, as the app says when. On the next start, each store takes its part back as it is built, and a child its
   own by its key.
