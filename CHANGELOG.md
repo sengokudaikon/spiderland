@@ -78,6 +78,9 @@ tag makes a GitHub release from that version's section.
   are each a shape of keys in the state. A child dropped stops what it runs, and an answer for it goes nowhere. `Child::tell`
   says how a child hears its lifecycle, and a `Store` whose intent is `From<Lifecycle>` has it.
 - `spiderland`: `Store::downgrade` and `WeakStore`, to hold a store without keeping it alive.
+- `spiderland`: `Saved`, `Store::save_in` and `Wiring::save_in`, so each store saves its part of the session under a key, in a
+  form the app picks, as the app says when. On the next start, each store takes its part back as it is built, and a child its
+  own by its key.
 - `spiderland`: `Stop::stopped`, a future that completes once the work's `Stopping` is dropped. Work that waits on something
   else, such as a child process, waits on it too, and stops the moment it is asked, with no loop that checks `is_stopped`.
 - `spiderland`: `Seen::State`, the state just after each intent is reduced and as a store wired on a `Wiring` starts, and
@@ -87,11 +90,12 @@ tag makes a GitHub release from that version's section.
 - `spiderland-slint`: `testing::Headless::separate_windows`, after which each component made gets a window of its own, and
   `Headless::on`, whose `testing::Input` sends real input to one window. `Input::close` asks a window to close, as its title
   bar's button does. Until `separate_windows`, every component shows in `Headless::window`, as before.
-- `showcase`: a small document library built on both crates, as their example and the test of what they can do. Fourteen
+- `showcase`: a small document library built on both crates, as their example and the test of what they can do. Fifteen
   scenarios run through its stores: a search whose late answers are dropped, paging, a selection that follows its document,
   a form that refuses an edit, saves one at a time, an export with progress that stops, a delete that asks first, a history
   page, settings shared by every window, a second window on one document, a close that asks first, failures that show in
-  the state, closing the library, which waits for every document's saves, and a trail of what each store ran. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
+  the state, closing the library, which waits for every document's saves, a trail of what each store ran, and a next start
+  where the last left off. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
   the app has to write by hand is marked `Workaround:` in its code. `mise run showcase` runs it on the desktop.
 
 ### Changed

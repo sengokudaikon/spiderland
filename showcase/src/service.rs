@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 /// Names one document.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct DocId(pub u32);
 
 /// A document as the service keeps it.

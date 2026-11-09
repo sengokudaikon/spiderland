@@ -85,6 +85,10 @@
 //! tells it its [`Standing`] as a [`Lifecycle`] event. A stack of pages, a slot and a set of documents are each a shape of
 //! keys in the state. A child that is dropped stops what it runs, and an answer for it goes nowhere.
 //!
+//! Each store can save its part of the session in a [`Saved`], under a key, in a form the app picks: the frame encodes nothing.
+//! The app says when to save, such as as the user asks to close, and on the next start each store takes its part back as it is
+//! built.
+//!
 //! A view with properties and no events takes one-shot commands, such as "focus this", through a [`Pulse`].
 //!
 //! A store has one host, which runs its effects, and any number of [`View`]s, which only show its state. A view attaches with
@@ -119,6 +123,7 @@ mod lifecycle;
 mod macros;
 mod pulse;
 mod requests;
+mod saved;
 mod store;
 mod subscriptions;
 mod test_store;
@@ -131,6 +136,7 @@ pub use error::Error;
 pub use lifecycle::{CloseAnswer, Closing, Lifecycle};
 pub use pulse::{Fired, Pulse};
 pub use requests::{Asked, Latest, OneAtATime};
+pub use saved::Saved;
 pub use store::{Attached, Connection, Effects, Feature, Host, Intents, Never, Seen, Step, Store, View, WeakStore, Wiring, start, step, subscriptions};
 pub use subscriptions::Subscriptions;
 pub use test_store::TestStore;

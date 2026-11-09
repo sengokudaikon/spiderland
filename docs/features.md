@@ -23,6 +23,7 @@
 | `Children`, `Store::children`, `Wiring::children` | Child stores a parent keeps, one for each key its state names: a stack of pages, a slot, or a set of documents. Each is built as its key appears and dropped once it goes, so an answer for a page closed goes nowhere. |
 | `Standing`, `Child` | Where the parent's state puts each child: shown, hidden or asked to close. Each change reaches the child as a `Lifecycle` event, through `Child::tell`, which a store whose intent is `From<Lifecycle>` has. |
 | `Store::downgrade`, `WeakStore` | Holds a store without keeping it alive, such as from a window's handler. |
+| `Saved`, `Store::save_in`, `Wiring::save_in` | Each store saves its part of the session under a key, in a form the app picks. The app calls `Saved::save` when it likes, such as on closing, and each store takes its part back as it is built on the next start. |
 | `Feature::start` | Sets up the first state and asks for effects, before the first render. |
 | `Intents::map` | Makes a sender of a child's type, so a child's host can run inside its parent's store. |
 | `Pulse` | A one-shot command to a view with properties and no events, such as "focus this". It is plain data for the state. |

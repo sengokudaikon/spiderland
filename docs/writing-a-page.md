@@ -178,6 +178,28 @@ wiring.children(&documents, library::documents, move |&id, library| {
 - A window doesn't keep its store alive. The parent keeps it, so a window held a moment longer, such as until the next turn of the
   event loop, doesn't keep its work going.
 
+**Saving where the user left off**
+
+Each store that is part of the session saves its own part in one `Saved`, under a key, in a form the app picks, such as JSON. On the
+next start, each takes its part back as it is built:
+
+```rust
+let saved = Saved::new(read_session());
+let state = saved.take("library").and_then(decode).map(library::State::restored).unwrap_or_default();
+let wiring = Store::<Library>::build(state, LibraryHost::new());
+wiring.save_in(&saved, "library", |state| encode(&library::session(state)));
+```
+
+- The app says when to save, by calling `Saved::save`, and keeps the result. Save as the user asks to close, while the children
+  that close then are still there to save.
+- A child saves under a key of its own, such as `document 3`, and its build takes its part by that key. A parent that rebuilds
+  its children from its own state doesn't need to know what each child saved.
+- Save the place, not the data a service owns: the search and its page, not its results. A store restored asks for those again
+  as it starts.
+- A store wired to take a shared value, such as the preferences, starts on the value restored, so the first one shared changes
+  nothing.
+- A part that doesn't decode, such as one an older build saved, starts afresh.
+
 **More than one window on a store**
 
 A store has one `Host`, which runs its effects, and any number of views. Write each window's view as a `WindowView`, and attach

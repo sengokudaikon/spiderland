@@ -49,6 +49,11 @@ slint::slint! {
         callback page-size-changed(int);
         callback word-count-changed(bool);
 
+        // The search the state holds, such as one restored. Typing stops the box following it, so each change is copied back.
+        in property <string> query;
+        changed query => {
+            search.text = query;
+        }
         out property <string> query-shown: search.text;
         search := TextInput {
             x: 0;

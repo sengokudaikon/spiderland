@@ -10,8 +10,11 @@ use crate::service::{DocId, EXPORT_STEPS, Service};
 use crate::settings::{self, Settings};
 use crate::trail::Trail;
 use crate::view::{DocRow, EditorWindow, LibraryWindow, RevisionRow};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 use slint::{ComponentHandle, Timer};
-use spiderland::{Attached, Child, Children, Fired, Host, Intents, Lifecycle, Never, Slice, Store, Version, callbacks};
+use spiderland::{Attached, Child, Children, Fired, Host, Intents, Lifecycle, Never, Saved, Slice, Store, Version, callbacks};
 use spiderland_slint::{Background, Rows, WindowHost, WindowView, Windowed, ask_before_closing, attach_window, on_watch};
 use std::any::Any;
 use std::cell::RefCell;
@@ -23,12 +26,17 @@ use std::time::Duration;
 /// children, each a store of its own. Every store adds what it runs to one trail.
 pub struct App(Rc<Inner>);
 
+/// What the app saves: each store's part, under its key, for the next start.
+pub type Session = Vec<(String, Value)>;
+
 struct Inner {
     settings: Store<Settings>,
     library: Store<Library>,
     library_window: LibraryWindow,
     documents: Children<DocId, Opened>,
     trail: Trail,
+    /// Saved as the library was last asked to close.
+    session: Rc<RefCell<Session>>,
 }
 
 impl fmt::Debug for App {
@@ -40,9 +48,18 @@ impl fmt::Debug for App {
 impl App {
     /// Builds the app on `service`, with work going to `background`, and shows the library.
     pub fn start(service: Service, background: Background) -> App {
+        App::restore(service, background, Session::new())
+    }
+
+    /// Builds the app as [`App::start`] does, where `session` left off: the settings, the search and its page, the document picked,
+    /// and the pages and documents open. A part that doesn't decode, such as one an older build saved, starts afresh.
+    pub fn restore(service: Service, background: Background, session: Session) -> App {
+        let saved = Saved::new(session);
         let trail = Trail::default();
-        let wiring = Store::<Settings>::build(settings::Preferences::default(), Quiet);
+        let preferences = saved.take("settings").and_then(decode).unwrap_or_default();
+        let wiring = Store::<Settings>::build(preferences, Quiet);
         wiring.observe(trail.follow("settings", settings::summary));
+        wiring.save_in(&saved, "settings", encode);
         let settings = wiring.start();
         let library_window = LibraryWindow::new().expect("the library window");
         let documents = Children::default();
@@ -54,9 +71,15 @@ impl App {
             documents: documents.clone(),
         };
         library_window.set_rows(host.rows.model());
-        // The library keeps a copy of the preferences. Shared, it gets them as they are now, and each change after.
-        let wiring = Store::<Library>::build(library::State::new(settings::Preferences::default()), Windowed::new(&library_window, host));
+        // The library keeps a copy of the preferences. Shared, it gets them as they are now, and each change after. It starts on
+        // them too, so the first one shared changes nothing, and the page restored stays.
+        let state = match saved.take("library").and_then(decode) {
+            Some(session) => library::State::restored(preferences, session),
+            None => library::State::new(preferences),
+        };
+        let wiring = Store::<Library>::build(state, Windowed::new(&library_window, host));
         wiring.observe(trail.follow("library", library::status));
+        wiring.save_in(&saved, "library", |state| encode(&library::session(state)));
         settings.share(&wiring.intents(), |preferences| *preferences, |preferences| library::Intent::Preferences(*preferences));
         // Each history page is a store of its own, with a view in the library's window. Going back drops it.
         wiring.children(&Children::default(), library::pages, {
@@ -83,8 +106,16 @@ impl App {
             on_page_size_changed: |size| settings::Intent::PageSize(size.max(0) as usize),
             on_word_count_changed: |on| settings::Intent::WordCount(on),
         });
-        // Closing the library closes the app, once every document has closed.
-        ask_before_closing(&library_window, &library.intents(), || Some(library::Intent::Life(Lifecycle::CloseRequested)));
+        // Closing the library closes the app, once every document has closed. The session is saved as the user asks, while the
+        // documents it names are still open.
+        let session = Rc::new(RefCell::new(Session::new()));
+        ask_before_closing(&library_window, &library.intents(), {
+            let session = Rc::clone(&session);
+            move || {
+                session.replace(saved.save());
+                Some(library::Intent::Life(Lifecycle::CloseRequested))
+            }
+        });
         library_window.show().expect("show the library");
         App(Rc::new(Inner {
             settings,
@@ -92,7 +123,13 @@ impl App {
             library_window,
             documents,
             trail,
+            session,
         }))
+    }
+
+    /// What the app saved as the library was last asked to close, for [`App::restore`] to start on the next time.
+    pub fn session(&self) -> Session {
+        self.0.session.borrow().clone()
     }
 
     /// What the stores ran, and what changed, as the trail keeps it.
@@ -148,6 +185,16 @@ impl App {
         }
         let _ = self.0.library_window.hide();
     }
+}
+
+/// A store's part of the session, as JSON.
+fn encode(part: &impl Serialize) -> Value {
+    serde_json::to_value(part).expect("plain data turns into JSON")
+}
+
+/// A store's part of the session, if it is the part this build saves.
+fn decode<T: DeserializeOwned>(part: Value) -> Option<T> {
+    serde_json::from_value(part).ok()
 }
 
 /// One document the library keeps: its store, and the windows on it. Each window has a view attached to the store for as long as
@@ -266,6 +313,7 @@ impl WindowHost<Library> for LibraryHost {
                 }),
             );
         });
+        window.set_query(state.query.as_str().into());
         window.set_status(library::status(state).into());
         window.set_page_size(state.preferences.page_size as i32);
         window.set_word_count(state.preferences.word_count);

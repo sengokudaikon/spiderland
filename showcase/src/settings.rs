@@ -2,8 +2,8 @@
 
 use spiderland::{Effects, Feature, Never};
 
-/// What the user chose.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What the user chose. The app saves them on closing, and starts on them the next time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Preferences {
     /// How many documents a page of the library lists.
     pub page_size: usize,

@@ -1,6 +1,6 @@
 //! The reducer's contract and the store that runs it.
 
-use crate::{Child, Children, Standing, Subscriptions};
+use crate::{Child, Children, Saved, Standing, Subscriptions};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -865,6 +865,13 @@ impl<F: Feature> Store<F> {
         *observers = observers.iter().cloned().chain([added]).collect();
     }
 
+    /// Saves this store's state in `saved` under `key`, as `encode` makes it, each time the app calls [`Saved::save`], for as long
+    /// as the store is alive. It doesn't keep the store alive. On the next start the store is built on what [`Saved::take`] gives
+    /// back for `key`, decoded by the app. A key added again is the later store's.
+    pub fn save_in<V: 'static>(&self, saved: &Saved<V>, key: impl Into<String>, encode: impl Fn(&F::State) -> V + 'static) {
+        saved.add(key.into(), crate::saved::saver(self, encode));
+    }
+
     /// Runs `change` on the state directly, for a test or a capture to set up or look at a state. Nothing renders until the
     /// next intent. Only under the `testing` feature: a real feature's changes go through its reducer, and to read the state,
     /// use [`Store::try_read`].
@@ -994,6 +1001,11 @@ impl<F: Feature> Wiring<F> {
     /// [`Store::observe`], from the start, so it sees the state [`Feature::start`] left and the effects it asked for as well.
     pub fn observe(&self, observer: impl Fn(Seen<'_, F>) + 'static) {
         self.0.observe(observer);
+    }
+
+    /// [`Store::save_in`], wired before the start.
+    pub fn save_in<V: 'static>(&self, saved: &Saved<V>, key: impl Into<String>, encode: impl Fn(&F::State) -> V + 'static) {
+        self.0.save_in(saved, key, encode);
     }
 
     /// Starts the store: runs [`Feature::start`], renders the first state, and performs the effects `start` asked for. Then it

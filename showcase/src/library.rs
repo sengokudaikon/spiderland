@@ -11,7 +11,7 @@ use spiderland::{Asked, CloseAnswer, Closing, Effects, Error, Feature, Latest, L
 pub struct Library;
 
 /// A page of the library's window. The first is always [`Page::List`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Page {
     /// The search and its results.
     List,
@@ -64,6 +64,21 @@ impl State {
         }
     }
 
+    /// Where `session` left off, with `preferences` as they are now. The pages and documents it names open again as the library
+    /// starts.
+    pub fn restored(preferences: Preferences, session: Session) -> State {
+        let mut pages = vec![Page::List];
+        pages.extend(session.pages.into_iter().filter(|page| *page != Page::List));
+        State {
+            query: session.query,
+            page: session.page,
+            selected: session.selected,
+            pages,
+            open: session.open,
+            ..State::new(preferences)
+        }
+    }
+
     /// The page shown.
     pub fn shown(&self) -> Page {
         *self.pages.last().expect("the list is always there")
@@ -72,6 +87,33 @@ impl State {
     /// How many pages the results fill, at least one.
     pub fn page_count(&self) -> usize {
         self.total.div_ceil(self.preferences.page_size).max(1)
+    }
+}
+
+/// Where the user is in the library, which the app saves on closing and starts on the next time: the search, the page of
+/// results, the document picked, the pages open and the documents open.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Session {
+    /// What the search box held.
+    pub query: String,
+    /// The page of results shown, from 0.
+    pub page: usize,
+    /// The document picked.
+    pub selected: Option<DocId>,
+    /// The pages, the one shown last.
+    pub pages: Vec<Page>,
+    /// The documents open.
+    pub open: Vec<DocId>,
+}
+
+/// Where the user is, as the app saves it.
+pub fn session(state: &State) -> Session {
+    Session {
+        query: state.query.clone(),
+        page: state.page,
+        selected: state.selected,
+        pages: state.pages.clone(),
+        open: state.open.clone(),
     }
 }
 
@@ -138,6 +180,10 @@ impl Feature for Library {
 
     fn start(state: &mut State, effects: &mut Effects<Effect>) {
         search(state, effects);
+        // A library restored from a session opens a window on each document it had open.
+        for id in &state.open {
+            effects.push(Effect::OpenWindow(*id));
+        }
     }
 
     fn reduce(state: &mut State, intent: Intent, effects: &mut Effects<Effect>) {

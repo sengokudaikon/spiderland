@@ -523,3 +523,40 @@ fn the_trail_names_each_step_and_each_change_to_what_a_store_shows() {
         "what a store tells others is there too"
     );
 }
+
+/// Scenario 15.
+#[test]
+fn a_library_restored_from_its_session_starts_where_it_left_off() {
+    let library = started_library();
+    library.send(library::Intent::NextPage);
+    let (asked, ..) = search(&library);
+    library.send(library::Intent::Found {
+        asked,
+        result: found(&[(4, "Delta notes"), (5, "Epsilon"), (6, "Zeta notes")], 7),
+    });
+    library.send(library::Intent::Select(DocId(5)));
+    library.send(library::Intent::Open(DocId(6)));
+    library.send(library::Intent::ShowHistory(DocId(4)));
+    library.take_effects();
+    let session = library.read(library::session);
+    assert_eq!(
+        session,
+        library::Session {
+            query: String::new(),
+            page: 1,
+            selected: Some(DocId(5)),
+            pages: vec![Page::List, Page::History(DocId(4))],
+            open: vec![DocId(6)],
+        }
+    );
+
+    let restored = TestStore::<Library>::new(library::State::restored(Preferences::default(), session.clone()));
+    let effects = restored.take_effects();
+    assert!(
+        matches!(&effects[..], [library::Effect::Search { page: 1, .. }, library::Effect::OpenWindow(DocId(6))]),
+        "{effects:?}"
+    );
+    assert_eq!(restored.read(library::session), session, "it saves the same again");
+    assert_eq!(restored.read(library::pages), [(DocId(4), Standing::Shown)], "the history page opens again, shown");
+    assert_eq!(restored.read(library::documents), [(DocId(6), Standing::Shown)], "and so does the document");
+}

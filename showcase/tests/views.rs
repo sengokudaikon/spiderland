@@ -3,7 +3,7 @@
 
 #![allow(missing_docs, reason = "the windows' types come from `slint!`, with no docs")]
 
-use showcase::app::App;
+use showcase::app::{App, Session};
 use showcase::pool::Pool;
 use showcase::service::{DocId, Service};
 use showcase::view::{EditorWindow, LibraryWindow};
@@ -24,10 +24,15 @@ struct Scene<'a> {
 
 impl<'a> Scene<'a> {
     fn start(headless: &'a Headless) -> Scene<'a> {
+        Scene::restore(headless, Session::new())
+    }
+
+    /// The app where `session` left off, on a service just started.
+    fn restore(headless: &'a Headless, session: Session) -> Scene<'a> {
         let service = Service::new(showcase::SAMPLE);
         let pool = Pool::new(4);
         let background = pool.background();
-        let app = App::start(service.clone(), background.clone());
+        let app = App::restore(service.clone(), background.clone(), session);
         headless.on(app.library().window()).resize(400, 300);
         idle(&background);
         Scene {
@@ -413,13 +418,49 @@ fn failures_show_and_the_app_goes_on(headless: &Headless) {
     assert_eq!(editor.get_status().trim(), "Revision 2", "the store went on");
 }
 
+/// Scenario 15.
+fn the_next_start_is_where_the_last_left_off(headless: &Headless) {
+    let scene = Scene::start(headless);
+    let library = scene.app.library();
+    scene.library().click(390.0, 10.0);
+    scene.library().type_text("a");
+    scene.idle();
+    scene.library().click(NEXT, BUTTONS);
+    scene.idle();
+    assert_eq!(titles(library), ["Delta notes", "Zeta notes", "Eta"]);
+    scene.library().click(WORDS, BUTTONS);
+    scene.library().click(PICK, row(0));
+    scene.library().click(OPEN, row(1));
+    scene.library().click(HISTORY, row(2));
+    scene.idle();
+    assert_eq!(library.get_history_title(), "History of document 7");
+    scene.library().close();
+    scene.idle();
+    assert!(!library.window().is_visible(), "nothing was unsaved, so the app closed");
+    let session = scene.app.session();
+    drop(scene);
+
+    let scene = Scene::restore(headless, session);
+    let library = scene.app.library();
+    assert_eq!(library.get_query_shown(), "a", "the search box shows the search again");
+    assert_eq!(library.get_status(), "Page 2 of 2");
+    assert_eq!(titles(library), ["Delta notes", "Zeta notes", "Eta"]);
+    assert!(library.get_rows().row_data(0).unwrap().selected, "the document picked is picked again");
+    assert!(library.get_word_count(), "and the settings are as they were");
+    assert!(library.get_history_shown());
+    assert_eq!(library.get_history_title(), "History of document 7", "the history page is open again, on top");
+    let editors = scene.app.windows(DocId(6));
+    assert_eq!(editors.len(), 1, "the document open has a window again");
+    assert!(editors[0].get_word_count_shown());
+}
+
 /// A scenario's name, and the scenario.
 type Scenario = (&'static str, fn(&Headless));
 
 fn main() {
     let headless = Headless::install();
     headless.separate_windows();
-    let scenarios: [Scenario; 11] = [
+    let scenarios: [Scenario; 12] = [
         ("search drops an older answer, and pages move", search_drops_an_older_answer_and_pages_move),
         ("the selection follows its document", the_selection_follows_its_document),
         ("a title too long is refused in the box", a_title_too_long_is_refused_in_the_box),
@@ -433,6 +474,7 @@ fn main() {
         ("a history shows, and back returns", a_history_shows_and_back_returns),
         ("a change made elsewhere reloads", a_change_made_elsewhere_reloads),
         ("closing the library waits for every document", closing_the_library_waits_for_every_document),
+        ("the next start is where the last left off", the_next_start_is_where_the_last_left_off),
         // It panics in an export on purpose, and the pool prints that panic.
         ("failures show, and the app goes on", failures_show_and_the_app_goes_on),
     ];
