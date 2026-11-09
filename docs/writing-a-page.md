@@ -57,7 +57,9 @@ Put it in the crate with the window.
   the intent its work would send. An effect left waiting fails the test. `TestStore::rendering` keeps what `present` makes of
   each render, and `take_outputs` gives what the feature told others. `subscribed` hands over a running subscription, to answer
   through as its work would: once the store stops it, what it sends goes nowhere.
-- Test behaviour across the view with `spiderland_slint::testing`: the real window on real background work.
+- Test behaviour across the view with `spiderland_slint::testing`: the real window on real background work. Find each control
+  with `testing::element` by its accessible label, and click or type into it wherever the layout put it. Give each control a
+  test uses a label of its own, and build the views with Slint's debug info, which the search needs.
 
 ## Watch out for
 
@@ -125,8 +127,8 @@ from dev-dependencies, so a normal build doesn't make every value on every rende
 
 **Text boxes**
 
-User input removes a one-way binding on `TextInput.text`, so the box stops following its property. A wrapper has to copy the
-property back:
+User input removes a one-way binding on `TextInput.text`, and on the text of `LineEdit` and `TextEdit` built on it, so the box
+stops following its property. A wrapper has to copy the property back:
 
 ```slint
 in property <string> value;
@@ -137,6 +139,9 @@ changed refused => { input.text = value; }
 
 The second line is for a reducer that can refuse an edit. A refusal leaves the state's text as it was, so `changed value` never
 runs and the box keeps the refused text. Fire a `Pulse` from the reducer and set `refused` to its serial.
+
+The same holds for every widget the user changes: a `CheckBox` or `Switch` and its `checked`, a `SpinBox` and its `value`. Copy
+each back with `changed`, as the showcase's library does.
 
 **`changed`**
 

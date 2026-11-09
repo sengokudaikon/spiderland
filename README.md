@@ -85,8 +85,8 @@ any later 1.x, for its channels.
 
 - [Features](docs/features.md): everything the crates provide.
 - [Writing a page](docs/writing-a-page.md): a feature, its host and its view, step by step.
-- [Showcase](showcase/src/lib.rs): a small document library built with both crates, with several windows, saves, an export and a
-  search. Its tests are the framework's acceptance test, and its code marks each workaround for what the framework doesn't do yet.
+- [Showcase](showcase/src/lib.rs): a small desktop document library built with both crates, on Slint's standard widgets, with
+  several windows, saves, an export and a search. Its tests are the framework's acceptance test, and its code marks each workaround for what the framework doesn't do yet.
   `mise run showcase` runs it on the desktop.
 - [Changelog](CHANGELOG.md): what changed in each version, and what a breaking change asks of you.
 

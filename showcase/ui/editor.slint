@@ -1,0 +1,201 @@
+// One window on a document: its title and body, what it says of itself, its actions, and the question it asks.
+
+import { Button, HorizontalBox, LineEdit, Palette, ProgressIndicator, TextEdit, VerticalBox } from "std-widgets.slint";
+
+export component EditorWindow inherits Window {
+    title: root.doc-title == "" ? "Document" : root.doc-title;
+    preferred-width: 560px;
+    preferred-height: 420px;
+    min-width: 420px;
+    min-height: 320px;
+
+    // A text box stops following its property once the user types, so each change is copied back. A refused edit leaves the
+    // property as it was, so its pulse copies it back too.
+    in property <string> doc-title;
+    in property <int> title-refused;
+    in property <string> body;
+    callback title-edited(string);
+    callback body-edited(string);
+    out property <string> title-shown: title-input.text;
+    out property <string> body-shown: body-input.text;
+    changed doc-title => {
+        title-input.text = doc-title;
+    }
+    changed title-refused => {
+        title-input.text = doc-title;
+    }
+    changed body => {
+        body-input.text = body;
+    }
+
+    in property <string> status;
+    in property <string> problem;
+    in property <bool> word-count-shown;
+    in property <int> words;
+
+    callback save();
+    callback export();
+    callback stop-export();
+    callback delete();
+
+    in property <bool> exporting;
+    in property <int> export-done;
+    in property <int> export-of;
+
+    // A toast shows each time its pulse moves, for a few seconds. The window's view counts the pulse from when it attached, so a
+    // window opened on a document that toasted before doesn't show that toast.
+    in property <string> toast-text;
+    in property <int> toast;
+    out property <int> toasts-shown;
+    out property <string> toast-showing;
+    out property <bool> toast-visible;
+    changed toast => {
+        toasts-shown += 1;
+        toast-showing = toast-text;
+        toast-visible = true;
+    }
+
+    // "" for none, "delete" or "close".
+    in property <string> asking;
+    callback answer(int);
+
+    VerticalBox {
+        title-input := LineEdit {
+            accessible-label: "Title";
+            placeholder-text: "Title";
+            edited(text) => {
+                root.title-edited(text);
+            }
+        }
+        body-input := TextEdit {
+            accessible-label: "Body";
+            vertical-stretch: 1;
+            edited(text) => {
+                root.body-edited(text);
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.status;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.problem;
+                color: #c42b1c;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.word-count-shown: Text {
+                text: root.words + " words";
+                vertical-alignment: center;
+            }
+        }
+
+        if root.exporting: HorizontalLayout {
+            spacing: 8px;
+            ProgressIndicator {
+                progress: root.export-of > 0 ? root.export-done / root.export-of : 0;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: "Exporting " + root.export-done + " of " + root.export-of;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalBox {
+            padding: 0;
+            Button {
+                text: "Save";
+                primary: true;
+                clicked => {
+                    root.save();
+                }
+            }
+            Button {
+                text: "Export";
+                enabled: !root.exporting;
+                clicked => {
+                    root.export();
+                }
+            }
+            Button {
+                text: "Stop";
+                enabled: root.exporting;
+                clicked => {
+                    root.stop-export();
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: "Delete";
+                clicked => {
+                    root.delete();
+                }
+            }
+        }
+
+        if root.asking != "": Rectangle {
+            background: Palette.alternate-background;
+            border-radius: 4px;
+            HorizontalBox {
+                Text {
+                    text: root.asking == "delete" ? "Delete this document?" : "Save the edits before closing?";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+                if root.asking == "delete": Button {
+                    text: "Yes, delete";
+                    clicked => {
+                        root.answer(0);
+                    }
+                }
+                if root.asking == "close": Button {
+                    text: "Save and close";
+                    primary: true;
+                    clicked => {
+                        root.answer(0);
+                    }
+                }
+                if root.asking == "close": Button {
+                    text: "Discard";
+                    clicked => {
+                        root.answer(1);
+                    }
+                }
+                Button {
+                    text: "Cancel";
+                    clicked => {
+                        root.answer(2);
+                    }
+                }
+            }
+        }
+    }
+
+    if root.toast-visible: Rectangle {
+        width: toast-label.preferred-width + 32px;
+        height: 36px;
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - 72px;
+        border-radius: 18px;
+        background: #323232;
+        toast-label := Text {
+            text: root.toast-showing;
+            color: white;
+        }
+    }
+    Timer {
+        interval: 3s;
+        running: root.toast-visible;
+        triggered => {
+            root.toast-visible = false;
+        }
+    }
+}

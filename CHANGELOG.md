@@ -117,8 +117,10 @@ tag makes a GitHub release from that version's section.
   page, settings shared by every window, a second window on one document, a close that asks first, failures that show in
   the state, closing the library, which waits for every document's saves, a trail of what each store ran, and a next start
   where the last left off, in which each history page and document takes back a part of its own, and edits that save by
-  themselves. `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows. What
-  the app has to write by hand is marked `Workaround:` in its code. `mise run showcase` runs it on the desktop.
+  themselves. Its windows are `.slint` files on Slint's standard widgets and layouts, compiled by its `build.rs`.
+  `tests/flows.rs` checks the rules with no window, and `tests/views.rs` runs the whole app over real windows, finding each
+  control by its accessible label. What the app has to write by hand is marked `Workaround:` in its code. `mise run showcase`
+  runs it on the desktop.
 
 ### Changed
 

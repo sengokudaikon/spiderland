@@ -1,0 +1,15 @@
+// The rows the hosts fill in, one struct per list.
+
+// One document of the library's page.
+export struct DocRow {
+    id: int,
+    title: string,
+    selected: bool,
+}
+
+// One saved state of a document, on its history page.
+export struct RevisionRow {
+    revision: int,
+    title: string,
+    picked: bool,
+}

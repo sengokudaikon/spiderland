@@ -7,11 +7,11 @@
 //!   keeps each document open and each [`history`] page as a child store. A document runs an [`export`] inside its store, as a
 //!   feature of its own.
 //! - [`trail`]: what the stores ran, by name, and what changed, for a fault report.
-//! - [`view`]: the windows, in Slint's language.
+//! - [`view`]: the windows, in `.slint` files under `ui/` that `build.rs` compiles, on Slint's standard widgets and layouts.
 //! - [`app`]: the hosts, and the app that builds the stores and windows and connects them.
 //!
 //! The scenarios, and where each is tested. `tests/flows.rs` runs a feature's rules through a `TestStore`, and `tests/views.rs`
-//! runs the whole app over real windows with no display.
+//! runs the whole app over real windows with no display, finding each control by its accessible label.
 //!
 //! | Scenario | Flows | Views |
 //! |---|---|---|

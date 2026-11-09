@@ -1,0 +1,221 @@
+// The library: a search over the documents, a page of them, and the settings. A document's history shows over the list.
+
+import { Button, CheckBox, HorizontalBox, LineEdit, ListView, Palette, SpinBox, Switch, VerticalBox } from "std-widgets.slint";
+import { DocRow, RevisionRow } from "rows.slint";
+
+// One row of a list, which shows when it is picked and picks itself when clicked. What it holds sits in its layout.
+component Row inherits TouchArea {
+    in property <bool> picked;
+    height: 40px;
+    Rectangle {
+        border-radius: 4px;
+        background: root.picked ? Palette.selection-background : root.has-hover ? Palette.alternate-background : transparent;
+    }
+    @children
+}
+
+export component LibraryWindow inherits Window {
+    title: "Library";
+    preferred-width: 640px;
+    preferred-height: 480px;
+    min-width: 480px;
+    min-height: 360px;
+
+    in property <[DocRow]> rows;
+    in property <string> status;
+    in property <int> page-size;
+    in property <bool> word-count;
+    in property <bool> autosave;
+    in property <bool> history-shown;
+    in property <string> history-title;
+    in property <[RevisionRow]> revisions;
+
+    callback typed(string);
+    callback select(int);
+    callback show-history(int);
+    callback open-document(int);
+    callback previous-page();
+    callback next-page();
+    callback refresh();
+    callback page-size-changed(int);
+    callback word-count-changed(bool);
+    callback autosave-changed(bool);
+    callback back();
+    callback pick-revision(int);
+
+    // What the state holds, such as a search restored. A widget the user changes stops following its property, so each change
+    // is copied back.
+    in property <string> query;
+    changed query => {
+        search.text = query;
+    }
+    changed page-size => {
+        size.value = page-size;
+    }
+    changed word-count => {
+        words.checked = word-count;
+    }
+    changed autosave => {
+        saving.checked = autosave;
+    }
+    out property <string> query-shown: search.text;
+
+    VerticalBox {
+        HorizontalBox {
+            padding: 0;
+            search := LineEdit {
+                accessible-label: "Search";
+                placeholder-text: "Search the titles";
+                edited(text) => {
+                    root.typed(text);
+                }
+            }
+            Button {
+                text: "Refresh";
+                clicked => {
+                    root.refresh();
+                }
+            }
+        }
+
+        ListView {
+            vertical-stretch: 1;
+            for row in root.rows: Row {
+                picked: row.selected;
+                clicked => {
+                    root.select(row.id);
+                }
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 4px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    spacing: 4px;
+                    Text {
+                        text: row.title;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        color: row.selected ? Palette.selection-foreground : Palette.foreground;
+                    }
+                    Button {
+                        text: "History";
+                        accessible-label: "History of " + row.title;
+                        clicked => {
+                            root.show-history(row.id);
+                        }
+                    }
+                    Button {
+                        text: "Open";
+                        accessible-label: "Open " + row.title;
+                        clicked => {
+                            root.open-document(row.id);
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            padding: 0;
+            Button {
+                text: "Previous";
+                accessible-label: "Previous page";
+                clicked => {
+                    root.previous-page();
+                }
+            }
+            Text {
+                text: root.status;
+                horizontal-stretch: 1;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Button {
+                text: "Next";
+                accessible-label: "Next page";
+                clicked => {
+                    root.next-page();
+                }
+            }
+        }
+
+        HorizontalBox {
+            padding: 0;
+            Text {
+                text: "Per page";
+                vertical-alignment: center;
+            }
+            size := SpinBox {
+                accessible-label: "Page size";
+                width: 120px;
+                minimum: 1;
+                maximum: 10;
+                value: root.page-size;
+                edited(value) => {
+                    root.page-size-changed(value);
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            words := CheckBox {
+                text: "Count words";
+                checked: root.word-count;
+                toggled => {
+                    root.word-count-changed(self.checked);
+                }
+            }
+            saving := Switch {
+                text: "Save by itself";
+                checked: root.autosave;
+                toggled => {
+                    root.autosave-changed(self.checked);
+                }
+            }
+        }
+    }
+
+    // A document's history, over the list. The touch area under it keeps clicks off the list.
+    if root.history-shown: Rectangle {
+        background: Palette.background;
+        TouchArea { }
+        VerticalBox {
+            HorizontalBox {
+                padding: 0;
+                Button {
+                    text: "Back";
+                    clicked => {
+                        root.back();
+                    }
+                }
+                Text {
+                    text: root.history-title;
+                    font-weight: 600;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            ListView {
+                vertical-stretch: 1;
+                for revision in root.revisions: Row {
+                    picked: revision.picked;
+                    clicked => {
+                        root.pick-revision(revision.revision);
+                    }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        Text {
+                            text: "Revision " + revision.revision + ": " + revision.title;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            color: revision.picked ? Palette.selection-foreground : Palette.foreground;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

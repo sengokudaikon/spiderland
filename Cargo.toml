@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Slint is pinned exactly: point releases have broken APIs before.
 slint = "=1.18.1"
+slint-build = "=1.18.1"
 # Slint's own search of a component's elements, for tests. Internal to Slint, so pinned with it.
 i-slint-backend-testing = "=1.18.1"
 # Only its channels, which follow semver, so any 1.x from 1.53 will do.

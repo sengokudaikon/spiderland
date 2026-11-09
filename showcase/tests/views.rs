@@ -1,7 +1,8 @@
-//! The showcase's scenarios over real windows with no display: the whole app, on its own pool, driven by real input. Slint's
-//! platform is set once per process, so the scenarios run in turn on the main thread, each on an app of its own.
+//! The showcase's scenarios over real windows with no display: the whole app, on its own pool, driven by real input. Each control
+//! is found by its accessible label, and clicked or typed into where Slint's layout put it. Slint's platform is set once per
+//! process, so the scenarios run in turn on the main thread, each on an app of its own.
 
-#![allow(missing_docs, reason = "the windows' types come from `slint!`, with no docs")]
+#![allow(missing_docs, reason = "the windows' types come from Slint, with no docs")]
 
 use showcase::app::{App, Session};
 use showcase::document::{AUTOSAVE_AFTER, RETRY_AFTER};
@@ -11,7 +12,11 @@ use showcase::view::{EditorWindow, LibraryWindow};
 use slint::platform::Key;
 use slint::{ComponentHandle, Model};
 use spiderland_slint::Background;
-use spiderland_slint::testing::{Headless, Input, advance, idle, settle, until};
+use spiderland_slint::testing::{Headless, Input, advance, element, find, idle, settle, until};
+
+/// The sizes the windows are tested at: what each prefers, which shows every row a test reads.
+const LIBRARY: (u32, u32) = (640, 480);
+const EDITOR: (u32, u32) = (560, 420);
 
 /// One app, on its own service and pool.
 struct Scene<'a> {
@@ -43,7 +48,7 @@ impl<'a> Scene<'a> {
         let pool = Pool::new(4);
         let background = pool.background();
         let app = App::restore(service.clone(), background.clone(), session);
-        headless.on(app.library().window()).resize(400, 300);
+        headless.on(app.library().window()).resize(LIBRARY.0, LIBRARY.1);
         Scene {
             headless,
             service,
@@ -57,12 +62,38 @@ impl<'a> Scene<'a> {
         self.headless.on(self.app.library().window())
     }
 
+    /// Clicks the library's control labelled `label`.
+    fn click(&self, label: &str) {
+        element(self.app.library(), label).click();
+    }
+
     /// Opens a window on `id`, and waits for the document.
     fn open(&self, id: DocId) -> EditorWindow {
-        let window = self.app.open(id);
-        self.headless.on(window.window()).resize(400, 300);
+        let window = self.open_held(id);
         idle(&self.background);
         window
+    }
+
+    /// Opens a window on `id` while calls may wait at the gate, so it doesn't wait for them.
+    fn open_held(&self, id: DocId) -> EditorWindow {
+        let window = self.app.open(id);
+        self.headless.on(window.window()).resize(EDITOR.0, EDITOR.1);
+        window
+    }
+
+    /// The window that opened on `id`, from a click in the library, sized as a test reads it.
+    fn opened(&self, id: DocId) -> EditorWindow {
+        let window = self.app.windows(id).pop().expect("a window opened on the document");
+        self.headless.on(window.window()).resize(EDITOR.0, EDITOR.1);
+        window
+    }
+
+    /// Types `text` at the end of what the editor's box labelled `label` holds.
+    fn type_at_end(&self, editor: &EditorWindow, label: &str, text: &str) {
+        element(editor, label).click();
+        let input = self.headless.on(editor.window());
+        input.key(Key::End);
+        input.type_text(text);
     }
 
     fn idle(&self) {
@@ -82,46 +113,21 @@ fn titles(library: &LibraryWindow) -> Vec<String> {
     library.get_rows().iter().map(|row| row.title.to_string()).collect()
 }
 
-/// The middle of the row at `index`, and of the part from `x`.
-fn row(index: usize) -> f32 {
-    40.0 + index as f32 * 20.0
-}
-
-const PICK: f32 = 100.0;
-const HISTORY: f32 = 280.0;
-const OPEN: f32 = 360.0;
-const BUTTONS: f32 = 250.0;
-const PREVIOUS: f32 = 40.0;
-const NEXT: f32 = 120.0;
-const REFRESH: f32 = 200.0;
-const LARGER: f32 = 300.0;
-const WORDS: f32 = 360.0;
-const AUTO: (f32, f32) = (360.0, 280.0);
-const EDITOR_BUTTONS: f32 = 180.0;
-const SAVE: f32 = 40.0;
-const EXPORT: f32 = 120.0;
-const STOP: f32 = 200.0;
-const DELETE: f32 = 280.0;
-const ANSWERS: f32 = 260.0;
-const CONFIRM: f32 = 65.0;
-const CANCEL: f32 = 330.0;
-
 /// Scenario 1.
 fn search_drops_an_older_answer_and_pages_move(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
     assert_eq!(titles(library), ["Alpha notes", "Beta plan", "Gamma list"]);
     assert_eq!(library.get_status(), "Page 1 of 3");
-    scene.library().click(NEXT, BUTTONS);
+    scene.click("Next page");
     scene.idle();
     assert_eq!(titles(library), ["Delta notes", "Epsilon", "Zeta notes"]);
-    scene.library().click(PREVIOUS, BUTTONS);
+    scene.click("Previous page");
     scene.idle();
 
     let gate = scene.service.gate();
     gate.hold();
-    scene.library().click(390.0, 10.0);
-    scene.library().type_text("n");
+    element(library, "Search").type_text("n");
     gate.wait_for("search n");
     scene.library().type_text("o");
     gate.wait_for("search no");
@@ -134,7 +140,7 @@ fn search_drops_an_older_answer_and_pages_move(headless: &Headless) {
     assert_eq!(library.get_status(), "Page 1 of 1");
 
     gate.open();
-    scene.library().click(REFRESH, BUTTONS);
+    scene.click("Refresh");
     scene.idle();
     assert_eq!(titles(library), ["Alpha notes", "Delta notes", "Zeta notes"]);
 }
@@ -143,12 +149,12 @@ fn search_drops_an_older_answer_and_pages_move(headless: &Headless) {
 fn the_selection_follows_its_document(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
-    scene.library().click(PICK, row(2));
+    scene.click("Gamma list");
     let selected = || library.get_rows().iter().position(|row| row.selected).map(|at| library.get_rows().row_data(at).unwrap().id);
     assert_eq!(selected(), Some(3));
 
     scene.service.delete(DocId(1)).unwrap();
-    scene.library().click(REFRESH, BUTTONS);
+    scene.click("Refresh");
     scene.idle();
     assert_eq!(titles(library), ["Beta plan", "Gamma list", "Delta notes"]);
     assert_eq!(library.get_rows().iter().position(|row| row.selected), Some(1), "the selection followed its document");
@@ -158,18 +164,16 @@ fn the_selection_follows_its_document(headless: &Headless) {
 /// Scenario 3.
 fn a_title_too_long_is_refused_in_the_box(headless: &Headless) {
     let scene = Scene::start(headless);
-    scene.library().click(OPEN, row(0));
+    scene.click("Open Alpha notes");
     scene.idle();
-    let editor = scene.app.windows(DocId(1)).pop().expect("the editor opened");
-    let input = headless.on(editor.window());
-    input.resize(400, 300);
+    let editor = scene.opened(DocId(1));
     assert_eq!(editor.get_title_shown(), "Alpha notes");
 
-    input.click(390.0, 10.0);
-    input.type_text(&"x".repeat(30));
+    scene.type_at_end(&editor, "Title", &"x".repeat(30));
     let kept = format!("Alpha notes{}", "x".repeat(29));
     assert_eq!(editor.get_title_shown(), kept, "the edit past the limit was refused, and the box shows the title kept");
 
+    let input = headless.on(editor.window());
     input.control_key("a");
     input.key(Key::Backspace);
     let doc = scene.app.document(DocId(1)).unwrap();
@@ -180,23 +184,22 @@ fn a_title_too_long_is_refused_in_the_box(headless: &Headless) {
 fn settings_and_edits_reach_every_window(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
-    scene.library().click(LARGER, BUTTONS);
+    scene.click("Page size");
+    scene.library().key(Key::UpArrow);
     scene.idle();
     assert_eq!(library.get_rows().row_count(), 4, "the library lists one more to a page");
-    scene.library().click(WORDS, BUTTONS);
+    scene.click("Count words");
 
     let first = scene.open(DocId(3));
     assert!(first.get_word_count_shown(), "a window opened later starts on the current settings");
     assert_eq!(first.get_words(), 3);
 
     let second = scene.open(DocId(3));
-    let typing = headless.on(first.window());
-    typing.click(390.0, 40.0);
-    typing.type_text(" four");
+    scene.type_at_end(&first, "Body", " four");
     assert_eq!(second.get_body_shown(), "one two three four", "the second window sees the first window's edits");
     assert_eq!(second.get_words(), 4);
 
-    scene.library().click(WORDS, BUTTONS);
+    scene.click("Count words");
     assert!(!first.get_word_count_shown() && !second.get_word_count_shown(), "a change reaches the windows already open");
 
     // One of two windows simply goes. The document stays with the other.
@@ -211,17 +214,17 @@ fn closing_asks_first_and_reopening_shows_the_current_state(headless: &Headless)
     let gate = scene.service.gate();
     let editor = scene.open(DocId(1));
     let input = headless.on(editor.window());
-    input.click(390.0, 40.0);
-    input.type_text(" again");
+    scene.type_at_end(&editor, "Body", " again");
 
     input.close();
     assert_eq!(editor.get_asking(), "close", "unsaved edits: it asks first");
-    input.click(CANCEL, ANSWERS);
+    element(&editor, "Cancel").click();
     assert!(editor.window().is_visible() && editor.get_asking().is_empty());
+    assert!(find(&editor, "Cancel").is_none(), "the question has gone");
 
     // A save under way when the window closes.
     gate.hold();
-    input.click(SAVE, EDITOR_BUTTONS);
+    element(&editor, "Save").click();
     gate.wait_for("save 1");
     input.close();
     assert!(!editor.window().is_visible(), "nothing is unsaved, so it closes at once");
@@ -240,6 +243,7 @@ fn closing_asks_first_and_reopening_shows_the_current_state(headless: &Headless)
     );
     assert_eq!(reopened.get_toasts_shown(), 1);
     assert_eq!(reopened.get_toast_showing(), "Saved");
+    assert!(find(&reopened, "Saved").is_some(), "the toast shows");
 
     headless.on(reopened.window()).close();
     let again = scene.open(DocId(1));
@@ -249,23 +253,12 @@ fn closing_asks_first_and_reopening_shows_the_current_state(headless: &Headless)
 
     // Asked first, saving closes once the save is in.
     gate.open();
-    let input = headless.on(again.window());
-    input.click(390.0, 40.0);
-    input.type_text("!");
-    input.close();
-    input.click(CONFIRM, ANSWERS);
+    scene.type_at_end(&again, "Body", "!");
+    headless.on(again.window()).close();
+    element(&again, "Save and close").click();
     scene.idle();
     assert!(!again.window().is_visible());
     assert_eq!(scene.service.get(DocId(1)).unwrap().body, "the first draft again!");
-}
-
-impl Scene<'_> {
-    /// Opens a window on `id` while calls may wait at the gate, so it doesn't wait for them.
-    fn open_held(&self, id: DocId) -> EditorWindow {
-        let window = self.app.open(id);
-        self.headless.on(window.window()).resize(400, 300);
-        window
-    }
 }
 
 /// Scenario 5.
@@ -273,16 +266,16 @@ fn an_export_reports_progress_and_stops(headless: &Headless) {
     let scene = Scene::start(headless);
     let gate = scene.service.gate();
     let editor = scene.open(DocId(2));
-    let input = headless.on(editor.window());
 
     gate.hold();
-    input.click(EXPORT, EDITOR_BUTTONS);
+    element(&editor, "Export").click();
     gate.wait_for("export 2 1");
     assert!(editor.get_exporting());
     gate.release("export 2 1");
     until("the first step", || editor.get_export_done() == 1);
+    assert!(find(&editor, "Exporting 1 of 4").is_some(), "the progress shows");
     gate.wait_for("export 2 2");
-    input.click(STOP, EDITOR_BUTTONS);
+    element(&editor, "Stop").click();
     assert!(!editor.get_exporting());
     gate.release("export 2 2");
     scene.idle();
@@ -290,7 +283,7 @@ fn an_export_reports_progress_and_stops(headless: &Headless) {
     assert_eq!(editor.get_toasts_shown(), 0);
 
     gate.open();
-    input.click(EXPORT, EDITOR_BUTTONS);
+    element(&editor, "Export").click();
     scene.idle();
     assert_eq!((editor.get_exporting(), editor.get_toast_showing().as_str()), (false, "Exported"));
 }
@@ -299,14 +292,14 @@ fn an_export_reports_progress_and_stops(headless: &Headless) {
 fn a_delete_asks_first(headless: &Headless) {
     let scene = Scene::start(headless);
     let editor = scene.open(DocId(1));
-    let input = headless.on(editor.window());
-    input.click(DELETE, EDITOR_BUTTONS);
+    element(&editor, "Delete").click();
     assert_eq!(editor.get_asking(), "delete");
-    input.click(CANCEL, ANSWERS);
+    assert!(find(&editor, "Discard").is_none(), "a delete is confirmed or called off");
+    element(&editor, "Cancel").click();
     assert!(scene.service.get(DocId(1)).is_some());
 
-    input.click(DELETE, EDITOR_BUTTONS);
-    input.click(CONFIRM, ANSWERS);
+    element(&editor, "Delete").click();
+    element(&editor, "Yes, delete").click();
     scene.idle();
     assert!(scene.service.get(DocId(1)).is_none());
     assert!(!editor.window().is_visible());
@@ -322,26 +315,26 @@ fn a_history_shows_and_back_returns(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
     scene.service.save(DocId(2), "Beta plan, revised", "two steps").unwrap();
-    scene.library().click(HISTORY, row(1));
+    scene.click("History of Beta plan");
     scene.idle();
     assert!(library.get_history_shown());
     let revisions: Vec<String> = library.get_revisions().iter().map(|revision| revision.title.to_string()).collect();
     assert_eq!(revisions, ["Beta plan, revised", "Beta plan"]);
-    scene.library().click(50.0, 10.0);
+    scene.click("Back");
     assert!(!library.get_history_shown());
 
     // Back before the history comes: the page is gone, and so is its answer.
     let gate = scene.service.gate();
     gate.hold();
-    scene.library().click(HISTORY, row(2));
+    scene.click("History of Gamma list");
     gate.wait_for("history 3");
     assert_eq!(library.get_history_title(), "Loading the history of document 3");
-    scene.library().click(50.0, 10.0);
+    scene.click("Back");
     gate.release("history 3");
     scene.idle();
     assert!(!library.get_history_shown());
     gate.open();
-    scene.library().click(HISTORY, row(0));
+    scene.click("History of Alpha notes");
     scene.idle();
     assert_eq!(library.get_history_title(), "History of document 1", "a page opened later shows only its own");
 }
@@ -351,21 +344,19 @@ fn closing_the_library_waits_for_every_document(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
     let editor = scene.open(DocId(1));
-    let input = headless.on(editor.window());
-    input.click(390.0, 40.0);
-    input.type_text(" again");
+    scene.type_at_end(&editor, "Body", " again");
 
     // Unsaved edits: the document asks first, and staying keeps the library.
     scene.library().close();
     assert_eq!(editor.get_asking(), "close");
-    input.click(CANCEL, ANSWERS);
+    element(&editor, "Cancel").click();
     assert!(library.window().is_visible() && editor.window().is_visible());
     assert_eq!(library.get_status(), "Page 1 of 3", "the close was called off");
 
     // A save under way: the editor closes at once, and the library waits for the save.
     let gate = scene.service.gate();
     gate.hold();
-    input.click(SAVE, EDITOR_BUTTONS);
+    element(&editor, "Save").click();
     gate.wait_for("save 1");
     scene.library().close();
     assert!(!editor.window().is_visible(), "nothing is unsaved, so the editor closes");
@@ -398,18 +389,17 @@ fn failures_show_and_the_app_goes_on(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
     scene._pool.refuse(true);
-    scene.library().click(REFRESH, BUTTONS);
+    scene.click("Refresh");
     settle();
     assert_eq!(library.get_status(), "The search failed: the pool refused background work.");
     scene._pool.refuse(false);
-    scene.library().click(REFRESH, BUTTONS);
+    scene.click("Refresh");
     scene.idle();
     assert_eq!(library.get_status(), "Page 1 of 3");
 
     let editor = scene.open(DocId(2));
-    let input = headless.on(editor.window());
     scene.service.panic_next_export();
-    input.click(EXPORT, EDITOR_BUTTONS);
+    element(&editor, "Export").click();
     scene.idle();
     assert_eq!(editor.get_status().trim(), "The export failed: background work panicked.");
     // Scenario 14: the trail names the steps that led to the failure, and what the editor showed after.
@@ -418,12 +408,11 @@ fn failures_show_and_the_app_goes_on(headless: &Headless) {
     assert!(trail.ends_with(&last.map(String::from)), "{trail:#?}");
 
     scene.service.fail_next_save("the disk is full");
-    input.click(390.0, 40.0);
-    input.type_text("!");
-    input.click(SAVE, EDITOR_BUTTONS);
+    scene.type_at_end(&editor, "Body", "!");
+    element(&editor, "Save").click();
     scene.idle();
     assert_eq!(editor.get_status().trim(), "the disk is full");
-    input.click(SAVE, EDITOR_BUTTONS);
+    element(&editor, "Save").click();
     scene.idle();
     assert_eq!(editor.get_status().trim(), "Revision 2", "the store went on");
 }
@@ -432,26 +421,24 @@ fn failures_show_and_the_app_goes_on(headless: &Headless) {
 fn the_next_start_is_where_the_last_left_off(headless: &Headless) {
     let scene = Scene::start(headless);
     let library = scene.app.library();
-    scene.library().click(390.0, 10.0);
-    scene.library().type_text("a");
+    element(library, "Search").type_text("a");
     scene.idle();
-    scene.library().click(NEXT, BUTTONS);
+    scene.click("Next page");
     scene.idle();
     assert_eq!(titles(library), ["Delta notes", "Zeta notes", "Eta"]);
-    scene.library().click(WORDS, BUTTONS);
-    scene.library().click(PICK, row(0));
-    scene.library().click(OPEN, row(1));
-    scene.library().click(HISTORY, row(2));
+    scene.click("Count words");
+    scene.click("Delta notes");
+    scene.click("Open Zeta notes");
+    scene.click("History of Eta");
     scene.idle();
     assert_eq!(library.get_history_title(), "History of document 7");
     // The history page and the document each keep something of their own: the revision picked, and an export under way.
-    scene.library().click(200.0, row(0));
+    scene.click("Revision 1: Eta");
     assert!(library.get_revisions().row_data(0).unwrap().picked);
-    let editor = scene.app.windows(DocId(6)).remove(0);
-    headless.on(editor.window()).resize(400, 300);
+    let editor = scene.opened(DocId(6));
     let gate = scene.service.gate();
     gate.hold();
-    headless.on(editor.window()).click(EXPORT, EDITOR_BUTTONS);
+    element(&editor, "Export").click();
     gate.wait_for("export 6 1");
     gate.release("export 6 1");
     until("the first step", || editor.get_export_done() == 1);
@@ -488,13 +475,12 @@ fn the_next_start_is_where_the_last_left_off(headless: &Headless) {
 fn edits_save_by_themselves(headless: &Headless) {
     let scene = Scene::start(headless);
     let gate = scene.service.gate();
-    scene.library().click(AUTO.0, AUTO.1);
+    scene.click("Save by itself");
     assert!(scene.app.library().get_autosave());
     let editor = scene.open(DocId(2));
     let typing = headless.on(editor.window());
     let body = || scene.service.get(DocId(2)).unwrap().body;
-    typing.click(390.0, 40.0);
-    typing.type_text("x");
+    scene.type_at_end(&editor, "Body", "x");
     scene.idle();
     assert_eq!(editor.get_status().as_str(), "Edited", "it waits for the edits to stop");
     advance(AUTOSAVE_AFTER);
